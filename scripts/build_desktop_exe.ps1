@@ -155,6 +155,7 @@ try {
     $args = @(
         "-m", "PyInstaller",
         "--name", $ExeName,
+        "--icon", "app/static/voctarium-icon.ico",
         "--onedir",
         "--noconsole",
         "--clean",
@@ -206,6 +207,16 @@ try {
     } else {
         Write-Warning "No runtime assets copied to dist. Add bin/models under project root and rebuild."
     }
+
+    $intermediateExePath = Join-Path $resolvedProjectRoot ("build\" + $ExeName + "\" + $ExeName + ".exe")
+    if (Test-Path -LiteralPath $intermediateExePath) {
+        Remove-Item -LiteralPath $intermediateExePath -Force
+    }
+
+    Write-Host ""
+    Write-Host "Use this executable:"
+    Write-Host $exePath
+    Write-Host "Do not run the intermediate build artifact under build\\$ExeName\\."
 }
 finally {
     Pop-Location
