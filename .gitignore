@@ -1,0 +1,42 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.pytest_tmp/
+.mypy_cache/
+.venv/
+.venv311/
+venv/
+
+# Local Python / desktop environments
+.python-version
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# Local runtime noise
+tmp_*
+*.out
+*.err
+voctarium_runtime.log
+voctarium_startup.log
+server.stdout.log
+server.stderr.log
+
+# Runtime storage and app state
+storage/uploads/*
+storage/work/*
+storage/results/*
+storage/e2e/*
+storage/bootstrap/*.zip
+storage/app_state.json
+storage/job_history.json
+!storage/.gitkeep
+
+# Heavy local assets
+bin/
+models/*
+!models/README.md
+test-input/

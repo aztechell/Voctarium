@@ -1,0 +1,192 @@
+﻿<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voctarium STT</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='shared.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', path='dashboard.css') }}" />
+  </head>
+  <body class="dashboard-page" data-theme="dark">
+    <main
+      id="dashboard-root"
+      class="dashboard-layout"
+      data-default-model="{{ default_model }}"
+    >
+      <aside class="panel intake-panel">
+        <div class="section-head section-head-spaced rail-head">
+          <h2 data-i18n="upload.title">Загрузка</h2>
+          <span id="selection-badge" class="micro-badge">0</span>
+        </div>
+
+        <form id="upload-form" class="upload-form" novalidate>
+          <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="File picker">
+            <input
+              id="file-input"
+              name="file"
+              type="file"
+              accept="audio/*,video/*"
+              multiple
+              hidden
+            />
+            <div class="drop-copy">
+              <p class="drop-title" data-i18n="upload.dropTitle">Перетащи файлы сюда</p>
+              <p class="drop-hint" data-i18n="upload.dropHint">или выбери через кнопку ниже</p>
+            </div>
+            <button id="pick-files-btn" type="button" class="secondary-btn" data-i18n="upload.pickFiles">
+              Выбрать файлы
+            </button>
+          </div>
+
+          <div id="selection-card" class="selection-card empty">
+            <div class="section-head section-head-spaced compact-head">
+              <div>
+                <h3 data-i18n="upload.selectedBatch">Выбранный пакет</h3>
+                <p id="selection-summary" class="subtle-line"></p>
+              </div>
+              <div class="selection-actions">
+                <button id="show-files-modal-btn" type="button" class="ghost-btn compact-btn" data-i18n="upload.openFileList">
+                  Список файлов
+                </button>
+                <button id="clear-selection-btn" type="button" class="ghost-btn compact-btn" data-i18n="upload.clearSelection">
+                  Очистить
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <div class="model-picker-row">
+              <label class="field-block">
+                <span data-i18n="upload.model">Модель faster-whisper</span>
+                <select id="model-select" name="model_id"></select>
+              </label>
+              <button id="open-models-modal-btn" type="button" class="ghost-btn compact-btn" data-i18n="upload.manageModels">
+                Модели
+              </button>
+            </div>
+
+            <label class="checkbox-card">
+              <input id="timestamps-input" name="include_timestamps" type="checkbox" />
+              <div>
+                <strong data-i18n="upload.timestamps">Включить таймкоды</strong>
+              </div>
+            </label>
+          </div>
+
+          <div class="upload-status-card">
+            <div class="upload-status-line">
+              <p id="upload-feedback" class="upload-feedback" aria-live="polite"></p>
+            </div>
+            <div class="progress-track upload-progress-track">
+              <div id="upload-progress-bar" class="progress-bar"></div>
+            </div>
+            <p id="upload-current-file" class="upload-current-file"></p>
+          </div>
+
+          <div class="upload-form-spacer" aria-hidden="true"></div>
+
+          <div class="enqueue-card">
+            <button id="enqueue-btn" type="submit" form="upload-form" class="primary-btn command-cta" data-i18n="upload.enqueue" disabled>
+              Добавить в очередь
+            </button>
+          </div>
+        </form>
+      </aside>
+
+      <section class="dashboard-main">
+        <header class="panel command-bar">
+          <div class="command-bar-main">
+            <div class="command-bar-copy">
+              <p id="command-batch-summary" class="command-batch-summary">нет</p>
+            </div>
+          </div>
+
+          <div class="utility-actions">
+            <button id="settings-btn" class="ghost-btn" type="button" data-i18n="actions.settings">Настройки</button>
+            <button id="lang-toggle" class="ghost-btn" type="button">EN</button>
+            <button id="theme-toggle" class="ghost-btn" type="button">Light</button>
+          </div>
+        </header>
+
+        <section class="panel jobs-rail">
+          <div class="section-head section-head-spaced jobs-rail-head rail-head">
+            <h2 data-i18n="jobs.title">Задачи</h2>
+            <span id="jobs-counter" class="micro-badge">0</span>
+          </div>
+          <p id="jobs-feedback" class="panel-feedback jobs-feedback" aria-live="polite"></p>
+          <p id="jobs-empty" class="jobs-empty state-copy" data-i18n="jobs.empty">Пока нет задач.</p>
+          <div id="jobs-list" class="jobs-list"></div>
+        </section>
+      </section>
+
+      <div id="files-modal" class="files-modal" hidden>
+        <div class="files-modal-backdrop" data-modal-dismiss="true"></div>
+        <section class="panel files-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="files-modal-title">
+          <div class="section-head section-head-spaced compact-head files-modal-head">
+            <div>
+              <h3 id="files-modal-title" data-i18n="upload.fileListTitle">Список файлов</h3>
+              <p id="files-modal-summary" class="subtle-line"></p>
+            </div>
+            <button id="close-files-modal-btn" type="button" class="ghost-btn compact-btn" data-i18n="actions.close">
+              Закрыть
+            </button>
+          </div>
+          <ul id="files-modal-list" class="files-modal-list"></ul>
+        </section>
+      </div>
+
+      <div id="models-modal" class="files-modal" hidden>
+        <div class="files-modal-backdrop" data-model-modal-dismiss="true"></div>
+        <section class="panel files-modal-dialog models-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="models-modal-title">
+          <div class="section-head section-head-spaced compact-head files-modal-head">
+            <div>
+              <h3 id="models-modal-title" data-i18n="models.title">Модели faster-whisper</h3>
+              <p id="models-modal-summary" class="subtle-line"></p>
+            </div>
+            <button id="close-models-modal-btn" type="button" class="ghost-btn compact-btn" data-i18n="actions.close">
+              Закрыть
+            </button>
+          </div>
+          <ul id="models-modal-list" class="files-modal-list models-modal-list"></ul>
+        </section>
+      </div>
+
+      <div id="settings-modal" class="files-modal" hidden>
+        <div class="files-modal-backdrop" data-settings-modal-dismiss="true"></div>
+        <section class="panel files-modal-dialog settings-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+          <div class="section-head section-head-spaced compact-head files-modal-head">
+            <div>
+              <h3 id="settings-modal-title" data-i18n="settings.title">Настройки</h3>
+              <p id="settings-modal-feedback" class="subtle-line"></p>
+            </div>
+            <button id="close-settings-modal-btn" type="button" class="ghost-btn compact-btn" data-i18n="actions.close">
+              Закрыть
+            </button>
+          </div>
+          <div class="settings-modal-body">
+            <label class="checkbox-card">
+              <input id="cleanup-uploads-input" type="checkbox" />
+              <div>
+                <strong data-i18n="settings.cleanupUploadsOnClose">Очищать загруженные файлы после закрытия</strong>
+              </div>
+            </label>
+            <label class="checkbox-card">
+              <input id="cleanup-queue-input" type="checkbox" />
+              <div>
+                <strong data-i18n="settings.cleanupQueueOnClose">Очищать очередь после закрытия</strong>
+              </div>
+            </label>
+          </div>
+          <div class="settings-modal-actions">
+            <button id="save-settings-btn" type="button" class="secondary-btn compact-btn" data-i18n="actions.save">
+              Сохранить
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script type="module" src="{{ url_for('static', path='dashboard.js') }}"></script>
+  </body>
+</html>

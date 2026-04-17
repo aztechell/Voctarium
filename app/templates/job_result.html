@@ -1,0 +1,158 @@
+﻿<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voctarium STT</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='shared.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', path='job-result.css') }}" />
+  </head>
+  <body class="result-page" data-theme="dark">
+    <main
+      id="result-root"
+      class="result-layout"
+      data-job-id="{{ job_id }}"
+      data-job-exists="{{ 'true' if job_exists else 'false' }}"
+    >
+      <section class="panel result-shell">
+        <header class="result-header">
+          <div class="result-title-block">
+            <div class="result-title-row">
+              <a id="back-link" class="ghost-btn compact-btn as-link result-back-link" href="/" data-i18n="app.backToJobs">Назад</a>
+              <h1 id="result-title" class="result-title">Voctarium</h1>
+            </div>
+          </div>
+
+          <div class="result-actions">
+            <button id="download-link" class="primary-btn compact-btn" type="button" data-i18n="actions.download" disabled>
+              Download .md
+            </button>
+            <button id="download-pdf-btn" class="secondary-btn compact-btn" type="button" data-i18n="actions.downloadPdf" disabled>
+              Download PDF
+            </button>
+            <button id="remove-btn" class="secondary-btn compact-btn" type="button" data-i18n="actions.remove">
+              Remove
+            </button>
+          </div>
+        </header>
+
+        <section id="editor-toolbar" class="result-info-panel editor-toolbar" hidden>
+          <div class="editor-toolbar-main">
+            <div class="mode-switch editor-toolbar-formatting">
+              <button id="editor-bold-btn" class="chip" type="button" data-i18n="result.bold">Жирный</button>
+              <button id="editor-italic-btn" class="chip" type="button" data-i18n="result.italic">Курсив</button>
+              <button id="editor-paragraph-btn" class="chip" type="button" data-i18n="result.paragraph">Параграф</button>
+              <button id="editor-h2-btn" class="chip" type="button" data-i18n="result.heading2">H2</button>
+              <button id="editor-h3-btn" class="chip" type="button" data-i18n="result.heading3">H3</button>
+              <button id="editor-bullets-btn" class="chip" type="button" data-i18n="result.bulletList">Маркированный список</button>
+              <button id="editor-ordered-btn" class="chip" type="button" data-i18n="result.orderedList">Нумерованный список</button>
+              <button id="editor-undo-btn" class="chip" type="button" data-i18n="result.undo">Undo</button>
+              <button id="editor-redo-btn" class="chip" type="button" data-i18n="result.redo">Redo</button>
+              <button id="editor-find-btn" class="chip" type="button" data-i18n="result.find">Поиск</button>
+              <button id="editor-reset-btn" class="chip" type="button" data-i18n="result.reset">Сбросить</button>
+            </div>
+            <div class="editor-toolbar-utility">
+              <div id="view-popover-anchor" class="toolbar-popover-anchor">
+                <button id="view-toggle-btn" class="ghost-btn compact-btn" type="button" data-i18n="result.view">
+                  Вид
+                </button>
+                <section id="reader-controls-panel" class="result-popover reader-controls-panel" hidden>
+                  <div class="reader-controls-grid">
+                    <label class="reader-control-field">
+                      <span class="reader-control-label" data-i18n="result.fontSize">Размер шрифта</span>
+                      <div class="reader-number-row">
+                        <input id="reader-font-size-input" type="number" min="12" max="32" step="1" value="18" />
+                        <span class="micro-badge">px</span>
+                      </div>
+                    </label>
+
+                    <div class="reader-control-field">
+                      <span class="reader-control-label" data-i18n="result.lineHeight">Межстрочие</span>
+                      <div class="mode-switch">
+                        <button id="reader-line-compact-btn" class="chip" type="button" data-i18n="result.lineCompact">
+                          Плотно
+                        </button>
+                        <button id="reader-line-normal-btn" class="chip active" type="button" data-i18n="result.lineNormal">
+                          Нормально
+                        </button>
+                        <button id="reader-line-relaxed-btn" class="chip" type="button" data-i18n="result.lineRelaxed">
+                          Свободно
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="reader-control-field">
+                      <span class="reader-control-label" data-i18n="result.contentWidth">Ширина текста</span>
+                      <div class="reader-range-row">
+                        <input id="reader-width-input" type="range" min="50" max="100" step="5" value="100" />
+                        <span id="reader-width-value" class="micro-badge">100%</span>
+                      </div>
+                    </div>
+
+                    <div class="reader-control-field">
+                      <span class="reader-control-label" data-i18n="result.justify">Выравнивание</span>
+                      <div class="mode-switch">
+                        <button id="reader-justify-left-btn" class="chip" type="button" data-i18n="result.justifyLeft">
+                          По левому краю
+                        </button>
+                        <button id="reader-justify-full-btn" class="chip active" type="button" data-i18n="result.justifyOn">
+                          По ширине
+                        </button>
+                        <button id="reader-justify-hyphen-btn" class="chip" type="button" data-i18n="result.justifyHyphen">
+                          По ширине + переносы
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="reader-control-field reader-toggle-field">
+                      <label class="checkbox-card reader-toggle-card">
+                        <input id="reader-paragraph-gap-input" type="checkbox" />
+                        <strong data-i18n="result.paragraphGap">Пустая строка между абзацами</strong>
+                      </label>
+                    </div>
+                  </div>
+                </section>
+              </div>
+              <div id="info-popover-anchor" class="toolbar-popover-anchor">
+                <button id="info-toggle-btn" class="ghost-btn compact-btn" type="button" data-i18n="result.metaTitle">
+                  Инфо
+                </button>
+                <section id="result-info-panel" class="result-popover result-info-panel" hidden>
+                  <div id="result-meta" class="result-meta-grid"></div>
+                </section>
+              </div>
+            </div>
+          </div>
+          <div class="editor-toolbar-status">
+            <button id="editor-save-btn" class="secondary-btn compact-btn" type="button" data-i18n="actions.save">
+              Сохранить
+            </button>
+            <span id="editor-save-status" class="micro-badge" data-i18n="result.editorStatusIdle">Без изменений</span>
+            <span id="editor-dirty-indicator" class="micro-badge" hidden>•</span>
+            <span id="editor-word-count" class="reader-count"></span>
+          </div>
+        </section>
+
+        <section class="result-main">
+          <div id="result-banner" class="result-banner"></div>
+          <div id="result-reader-stage" class="result-reader-stage">
+            <div id="result-content" class="result-content-card empty"></div>
+            <section id="editor-findbar" class="result-info-panel editor-findbar" hidden>
+              <div class="editor-findbar-main">
+                <input id="editor-find-input" type="search" placeholder="Найти в документе" data-i18n-placeholder="result.findPlaceholder" />
+                <span id="editor-find-status" class="micro-badge" data-i18n="result.findNoResults">Ничего не найдено</span>
+              </div>
+              <div class="editor-findbar-actions">
+                <button id="editor-find-prev-btn" class="ghost-btn compact-btn" type="button" data-i18n="result.findPrev">Назад</button>
+                <button id="editor-find-next-btn" class="ghost-btn compact-btn" type="button" data-i18n="result.findNext">Вперед</button>
+                <button id="editor-find-close-btn" class="ghost-btn compact-btn" type="button" data-i18n="result.findClose">Закрыть поиск</button>
+              </div>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="{{ url_for('static', path='job-result.js') }}"></script>
+  </body>
+</html>
