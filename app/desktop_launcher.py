@@ -36,6 +36,7 @@ _DESKTOP_STRINGS = {
         "runtime_progress": "Загрузка компонентов: {percent}%",
         "preparing": "Подготовка сервера...",
         "opening": "Открытие окна...",
+        "already_running": "Voctarium уже запущен. Дождитесь завершения первого запуска.",
         "quit_confirmation": "Закрыть Voctarium? Текущая desktop-сессия завершится, а загруженные файлы будут очищены.",
         "quit": "Закрыть",
         "cancel": "Отмена",
@@ -46,6 +47,7 @@ _DESKTOP_STRINGS = {
         "runtime_progress": "Downloading components: {percent}%",
         "preparing": "Preparing local server...",
         "opening": "Opening desktop window...",
+        "already_running": "Voctarium is already running. Wait for the first launch to finish.",
         "quit_confirmation": "Close Voctarium? The current desktop session will end and uploaded files will be cleaned.",
         "quit": "Quit",
         "cancel": "Cancel",
@@ -353,6 +355,45 @@ class StartupSplash:
         self._close_requested.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=3.0)
+
+
+class PyInstallerStartupSplash:
+    def __init__(self) -> None:
+        self._message = _DESKTOP_STRINGS["ru"]["launching"]
+        self._module = None
+
+    def start(self) -> bool:
+        try:
+            import pyi_splash
+
+            self._module = pyi_splash
+            pyi_splash.update_text(self._message)
+            return bool(pyi_splash.is_alive())
+        except Exception:
+            return False
+
+    def update_message(self, message: str) -> None:
+        self._message = message
+        if self._module is None:
+            return
+        try:
+            self._module.update_text(message)
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        if self._module is None:
+            return
+        try:
+            self._module.close()
+        except Exception:
+            pass
+
+
+def create_startup_splash() -> StartupSplash | PyInstallerStartupSplash:
+    if getattr(sys, "frozen", False):
+        return PyInstallerStartupSplash()
+    return StartupSplash()
 
 
 
@@ -767,7 +808,8 @@ def run_desktop(
     write_startup_trace("run_desktop: begin")
 
     language = detect_desktop_language()
-    splash = startup_splash_factory() if startup_splash_factory is not None else None
+    splash_factory = startup_splash_factory or create_startup_splash
+    splash = splash_factory()
     splash_closed = False
 
     def close_splash(reason: str) -> None:
@@ -803,7 +845,11 @@ def run_desktop(
             template = _desktop_string(language, "runtime_progress")
             _set_splash_message(splash, template.format(percent=percent))
 
-        ensure_ml_runtime(progress_callback=update_runtime_progress)
+        try:
+            ensure_ml_runtime(progress_callback=update_runtime_progress)
+        except Exception:
+            close_splash("closing startup splash after ML runtime failure")
+            raise
 
     cleaned_start = purge_session_storage(runtime_root)
     if cleaned_start:
@@ -883,8 +929,14 @@ def run_desktop(
             webview.start(gui="edgechromium", debug=False)
             write_startup_trace("webview event loop exited")
         except Exception as exc:
+            write_startup_log(
+                "Voctarium WebView2 Error",
+                str(exc),
+                details=traceback.format_exc(),
+            )
             raise DesktopLaunchError(
-                "Cannot start WebView2 window. Ensure Microsoft Edge WebView2 Runtime is installed."
+                "Cannot start WebView2 window: "
+                f"{exc}. Ensure Microsoft Edge WebView2 Runtime is installed."
             ) from exc
     finally:
         close_splash("closing startup splash during cleanup")
@@ -901,12 +953,51 @@ def run_desktop(
 
 
 
+def _acquire_desktop_mutex() -> tuple[int | None, bool]:
+    if os.name != "nt":
+        return None, False
+
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    handle = kernel32.CreateMutexW(None, True, "Local\\VoctariumDesktop")
+    if not handle:
+        return None, False
+    return int(handle), ctypes.get_last_error() == 183
+
+
+def _release_desktop_mutex(handle: int | None) -> None:
+    if handle is None or os.name != "nt":
+        return
+
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.ReleaseMutex.argtypes = [ctypes.c_void_p]
+    kernel32.ReleaseMutex.restype = ctypes.c_bool
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_bool
+    native_handle = ctypes.c_void_p(handle)
+    kernel32.ReleaseMutex(native_handle)
+    kernel32.CloseHandle(native_handle)
+
+
 def main() -> int:
+    mutex_handle, already_running = _acquire_desktop_mutex()
+    if already_running:
+        _release_desktop_mutex(mutex_handle)
+        language = detect_desktop_language()
+        show_native_error("Voctarium", _desktop_string(language, "already_running"))
+        return 1
+
     try:
         return run_desktop()
     except DesktopLaunchError as exc:
         write_startup_log("Voctarium Startup Error", str(exc))
         show_native_error("Voctarium Startup Error", str(exc))
+        return 1
     except Exception as exc:  # pragma: no cover - defensive branch
         write_startup_log(
             "Voctarium Fatal Error",
@@ -914,4 +1005,6 @@ def main() -> int:
             details=traceback.format_exc(),
         )
         show_native_error("Voctarium Fatal Error", str(exc))
-    return 1
+        return 1
+    finally:
+        _release_desktop_mutex(mutex_handle)

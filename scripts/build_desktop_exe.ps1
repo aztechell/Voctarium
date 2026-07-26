@@ -157,6 +157,7 @@ try {
         "-m", "PyInstaller",
         "--name", $ExeName,
         "--icon", "app/static/voctarium-icon.ico",
+        "--splash", "app/static/voctarium-icon.png",
         "--onedir",
         "--noconsole",
         "--clean",
@@ -252,6 +253,19 @@ try {
 
     Write-Host "Whisper and RUPunct models are not bundled."
     Write-Host "Faster-whisper models can be downloaded manually from the app UI."
+
+    $installText = @(
+        "Voctarium v$ReleaseVersion - Windows x64"
+        ""
+        "1. Extract the entire archive."
+        "2. Run Voctarium.exe."
+        "3. On first launch, wait while the ML runtime is downloaded and installed."
+        "4. Download and select a faster-whisper model from the Dashboard."
+        ""
+        "The first launch requires an internet connection and about 2 GB of free space."
+        "Do not start a second copy while the first launch is in progress."
+    )
+    Set-Content -LiteralPath (Join-Path $distDir "INSTALL.txt") -Value $installText -Encoding UTF8
 
     $intermediateExePath = Join-Path $resolvedProjectRoot ("build\" + $ExeName + "\" + $ExeName + ".exe")
     if (Test-Path -LiteralPath $intermediateExePath) {
