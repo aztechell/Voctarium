@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -33,7 +34,9 @@ _DESKTOP_STRINGS = {
     "ru": {
         "launching": "Запуск Voctarium...",
         "installing_runtime": "Установка компонентов распознавания...",
-        "runtime_progress": "Загрузка компонентов: {percent}%",
+        "runtime_progress": "Загрузка компонентов: {downloaded_mb} / {total_mb} МБ",
+        "extracting_runtime": "Распаковка компонентов распознавания...",
+        "first_launch_hint": "Первый запуск может занять несколько минут",
         "preparing": "Подготовка сервера...",
         "opening": "Открытие окна...",
         "already_running": "Voctarium уже запущен. Дождитесь завершения первого запуска.",
@@ -44,7 +47,9 @@ _DESKTOP_STRINGS = {
     "en": {
         "launching": "Starting Voctarium...",
         "installing_runtime": "Installing speech recognition components...",
-        "runtime_progress": "Downloading components: {percent}%",
+        "runtime_progress": "Downloading components: {downloaded_mb} / {total_mb} MB",
+        "extracting_runtime": "Extracting speech recognition components...",
+        "first_launch_hint": "The first launch may take several minutes",
         "preparing": "Preparing local server...",
         "opening": "Opening desktop window...",
         "already_running": "Voctarium is already running. Wait for the first launch to finish.",
@@ -232,167 +237,241 @@ class DesktopSaveBridge:
         return {"ok": True}
 
 
+def run_startup_splash_window(status_path: str) -> int:
+    import tkinter as tk
+
+    path = Path(status_path)
+
+    def read_state() -> dict[str, object]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    state = read_state()
+    width = int(state.get("width", 520))
+    height = int(state.get("height", 184))
+
+    tk.NoDefaultRoot()
+    root = tk.Tk()
+    root.title(str(state.get("title", "Voctarium")))
+    root.resizable(False, False)
+    root.configure(bg="#11161d")
+    root.protocol("WM_DELETE_WINDOW", root.iconify)
+
+    frame = tk.Frame(
+        root,
+        bg="#11161d",
+        padx=24,
+        pady=22,
+        highlightbackground="#263241",
+        highlightthickness=1,
+    )
+    frame.pack(fill="both", expand=True)
+
+    title_label = tk.Label(
+        frame,
+        text=str(state.get("title", "Voctarium")),
+        bg="#11161d",
+        fg="#f5f7fb",
+        font=("Segoe UI Semibold", 15),
+        anchor="w",
+    )
+    title_label.pack(fill="x")
+
+    message_label = tk.Label(
+        frame,
+        text=str(state.get("message", "")),
+        bg="#11161d",
+        fg="#aeb7c4",
+        font=("Segoe UI", 10),
+        anchor="w",
+        justify="left",
+        wraplength=width - 50,
+    )
+    message_label.pack(fill="x", pady=(12, 12))
+
+    progress_row = tk.Frame(frame, bg="#11161d")
+    progress_row.pack(fill="x")
+
+    progress_canvas = tk.Canvas(
+        progress_row,
+        height=12,
+        bg="#263241",
+        highlightthickness=0,
+    )
+    progress_canvas.pack(side="left", fill="x", expand=True)
+    progress_fill = progress_canvas.create_rectangle(
+        0,
+        0,
+        0,
+        12,
+        fill="#39aee8",
+        outline="",
+    )
+
+    percent_label = tk.Label(
+        progress_row,
+        text="0%",
+        width=5,
+        bg="#11161d",
+        fg="#dfe7ef",
+        font=("Segoe UI Semibold", 10),
+        anchor="e",
+    )
+    percent_label.pack(side="right", padx=(12, 0))
+
+    hint_label = tk.Label(
+        frame,
+        text=str(state.get("hint", "")),
+        bg="#11161d",
+        fg="#657487",
+        font=("Segoe UI", 9),
+        anchor="w",
+    )
+    hint_label.pack(fill="x", pady=(10, 0))
+
+    root.update_idletasks()
+    x = max((root.winfo_screenwidth() - width) // 2, 0)
+    y = max((root.winfo_screenheight() - height) // 3, 0)
+    root.geometry(f"{width}x{height}+{x}+{y}")
+
+    def check_state() -> None:
+        current = read_state()
+        if bool(current.get("closed", False)):
+            root.destroy()
+            return
+        message_label.configure(text=str(current.get("message", "")))
+        percent = max(0, min(100, int(current.get("progress", 0))))
+        canvas_width = max(progress_canvas.winfo_width(), 1)
+        progress_canvas.coords(progress_fill, 0, 0, canvas_width * percent / 100, 12)
+        percent_label.configure(text=f"{percent}%")
+        root.after(80, check_state)
+
+    root.after(80, check_state)
+    root.mainloop()
+    return 0
+
+
 class StartupSplash:
     def __init__(
         self,
         *,
         title: str = "Voctarium",
         message: str = _DESKTOP_STRINGS["ru"]["launching"],
-        width: int = 380,
-        height: int = 128,
+        width: int = 520,
+        height: int = 184,
     ) -> None:
         self.title = title
         self.width = width
         self.height = height
         self._message = message
-        self._message_lock = threading.Lock()
-        self._thread: threading.Thread | None = None
-        self._started = threading.Event()
-        self._close_requested = threading.Event()
-        self._failed = False
-        self._tk = None
+        language = detect_desktop_language()
+        self._hint = _desktop_string(language, "first_launch_hint")
+        self._progress = 0
+        self._process: subprocess.Popen | None = None
+        self._status_path: Path | None = None
 
     def _load_tkinter(self):
         import tkinter as tk
 
         return tk
 
-    def _center_window(self, root) -> None:
-        root.update_idletasks()
-        x = max((root.winfo_screenwidth() - self.width) // 2, 0)
-        y = max((root.winfo_screenheight() - self.height) // 3, 0)
-        root.geometry(f"{self.width}x{self.height}+{x}+{y}")
-
-    def _get_message(self) -> str:
-        with self._message_lock:
-            return self._message
-
-    def update_message(self, message: str) -> None:
-        with self._message_lock:
-            self._message = message
-
-    def _run(self) -> None:
-        try:
-            tk = self._tk
-            if tk is None:
-                self._failed = True
-                self._started.set()
-                return
-
-            root = tk.Tk()
-            root.title(self.title)
-            root.resizable(False, False)
-            root.configure(bg="#11161d")
-            root.attributes("-topmost", True)
-            root.protocol("WM_DELETE_WINDOW", lambda: None)
-
-            frame = tk.Frame(root, bg="#11161d", padx=18, pady=18)
-            frame.pack(fill="both", expand=True)
-
-            accent = tk.Frame(frame, bg="#3aa7b5", width=6)
-            accent.pack(side="left", fill="y")
-
-            content = tk.Frame(frame, bg="#11161d", padx=14)
-            content.pack(side="left", fill="both", expand=True)
-
-            title_label = tk.Label(
-                content,
-                text=self.title,
-                bg="#11161d",
-                fg="#f5f7fb",
-                font=("Segoe UI Semibold", 12),
-                anchor="w",
-            )
-            title_label.pack(fill="x")
-
-            message_label = tk.Label(
-                content,
-                text=self._get_message(),
-                bg="#11161d",
-                fg="#aeb7c4",
-                font=("Segoe UI", 10),
-                anchor="w",
-                justify="left",
-                wraplength=self.width - 90,
-            )
-            message_label.pack(fill="both", expand=True, pady=(10, 0))
-
-            self._center_window(root)
-            self._started.set()
-
-            def check_state() -> None:
-                if self._close_requested.is_set():
-                    root.destroy()
-                    return
-                message_label.configure(text=self._get_message())
-                root.after(80, check_state)
-
-            root.after(80, check_state)
-            root.mainloop()
-        except Exception:
-            self._failed = True
-            self._started.set()
-
-    def start(self) -> bool:
-        if self._thread is not None and self._thread.is_alive():
-            return True
-
-        self._started.clear()
-        self._close_requested.clear()
-        self._failed = False
-
-        try:
-            self._tk = self._load_tkinter()
-        except Exception:
-            return False
-
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        self._started.wait(timeout=2.0)
-        return self._started.is_set() and not self._failed
-
-    def close(self) -> None:
-        self._close_requested.set()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=3.0)
-
-
-class PyInstallerStartupSplash:
-    def __init__(self) -> None:
-        self._message = _DESKTOP_STRINGS["ru"]["launching"]
-        self._module = None
-
-    def start(self) -> bool:
-        try:
-            import pyi_splash
-
-            self._module = pyi_splash
-            pyi_splash.update_text(self._message)
-            return bool(pyi_splash.is_alive())
-        except Exception:
-            return False
+    def _write_status(self, *, closed: bool = False) -> None:
+        if self._status_path is None:
+            return
+        payload = {
+            "title": self.title,
+            "message": self._message,
+            "hint": self._hint,
+            "progress": self._progress,
+            "width": self.width,
+            "height": self.height,
+            "closed": closed,
+        }
+        temporary_path = self._status_path.with_suffix(".tmp")
+        temporary_path.write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        os.replace(temporary_path, self._status_path)
 
     def update_message(self, message: str) -> None:
         self._message = message
-        if self._module is None:
-            return
+        self._write_status()
+
+    def update_progress(self, percent: int) -> None:
+        self._progress = max(0, min(100, int(percent)))
+        self._write_status()
+
+    def start(self) -> bool:
+        if self._process is not None and self._process.poll() is None:
+            return True
+
         try:
-            self._module.update_text(message)
+            self._load_tkinter()
         except Exception:
-            pass
+            return False
+
+        self._status_path = (
+            Path(tempfile.gettempdir())
+            / f"voctarium-splash-{os.getpid()}-{time.time_ns()}.json"
+        )
+        self._write_status()
+
+        if getattr(sys, "frozen", False):
+            command = [
+                sys.executable,
+                "--startup-splash",
+                "--splash-status",
+                str(self._status_path),
+            ]
+        else:
+            command = [
+                sys.executable,
+                "-m",
+                "app.desktop_entry",
+                "--startup-splash",
+                "--splash-status",
+                str(self._status_path),
+            ]
+
+        kwargs: dict[str, object] = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        try:
+            self._process = subprocess.Popen(command, **kwargs)
+        except OSError:
+            self.close()
+            return False
+
+        time.sleep(0.25)
+        return self._process.poll() is None
 
     def close(self) -> None:
-        if self._module is None:
-            return
         try:
-            self._module.close()
-        except Exception:
+            self._write_status(closed=True)
+        except OSError:
             pass
 
+        if self._process is not None and self._process.poll() is None:
+            try:
+                self._process.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                self._process.terminate()
 
-def create_startup_splash() -> StartupSplash | PyInstallerStartupSplash:
-    if getattr(sys, "frozen", False):
-        return PyInstallerStartupSplash()
+        if self._status_path is not None:
+            self._status_path.unlink(missing_ok=True)
+            self._status_path.with_suffix(".tmp").unlink(missing_ok=True)
+
+
+def create_startup_splash() -> StartupSplash:
     return StartupSplash()
 
 
@@ -555,6 +634,15 @@ def _set_splash_message(splash: object | None, message: str) -> None:
     updater = getattr(splash, "update_message", None)
     if callable(updater):
         updater(message)
+
+
+def _set_splash_progress(splash: object | None, percent: int) -> None:
+    if splash is None:
+        return
+    updater = getattr(splash, "update_progress", None)
+    if callable(updater):
+        updater(percent)
+
 
 
 
@@ -807,6 +895,19 @@ def run_desktop(
 ) -> int:
     write_startup_trace("run_desktop: begin")
 
+    if getattr(sys, "frozen", False):
+        write_startup_trace("preloading WebView2/pythonnet runtime")
+        try:
+            import webview.platforms.winforms  # noqa: F401
+        except Exception as exc:
+            write_startup_log(
+                "Voctarium WebView2 Preload Error",
+                str(exc),
+                details=traceback.format_exc(),
+            )
+            raise DesktopLaunchError(f"Cannot initialize WebView2 runtime: {exc}") from exc
+        write_startup_trace("WebView2/pythonnet runtime preloaded")
+
     language = detect_desktop_language()
     splash_factory = startup_splash_factory or create_startup_splash
     splash = splash_factory()
@@ -837,16 +938,35 @@ def run_desktop(
         from app.runtime_bootstrap import ensure_ml_runtime
 
         _set_splash_message(splash, _desktop_string(language, "installing_runtime"))
+        _set_splash_progress(splash, 0)
 
         def update_runtime_progress(downloaded: int, total: int | None) -> None:
             if not total:
                 return
             percent = max(0, min(100, int(downloaded * 100 / total)))
             template = _desktop_string(language, "runtime_progress")
-            _set_splash_message(splash, template.format(percent=percent))
+            _set_splash_message(
+                splash,
+                template.format(
+                    downloaded_mb=max(0, round(downloaded / 1024 / 1024)),
+                    total_mb=max(1, round(total / 1024 / 1024)),
+                ),
+            )
+            _set_splash_progress(splash, percent)
+
+        def update_runtime_status(status: str) -> None:
+            if status == "extracting":
+                _set_splash_message(
+                    splash,
+                    _desktop_string(language, "extracting_runtime"),
+                )
+                _set_splash_progress(splash, 100)
 
         try:
-            ensure_ml_runtime(progress_callback=update_runtime_progress)
+            ensure_ml_runtime(
+                progress_callback=update_runtime_progress,
+                status_callback=update_runtime_status,
+            )
         except Exception:
             close_splash("closing startup splash after ML runtime failure")
             raise

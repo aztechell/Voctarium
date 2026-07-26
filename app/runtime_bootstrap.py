@@ -25,6 +25,7 @@ REQUIRED_RUNTIME_PATHS = (
 )
 
 ProgressCallback = Callable[[int, int | None], None]
+StatusCallback = Callable[[str], None]
 
 
 class RuntimeBootstrapError(RuntimeError):
@@ -71,6 +72,7 @@ def ensure_ml_runtime(
     runtime_root: Path | None = None,
     asset_url: str = ML_RUNTIME_URL,
     progress_callback: ProgressCallback | None = None,
+    status_callback: StatusCallback | None = None,
 ) -> bool:
     target_internal = Path(internal_dir).resolve() if internal_dir else _frozen_internal_dir()
     target_runtime = Path(runtime_root).resolve() if runtime_root else _frozen_runtime_root()
@@ -86,6 +88,8 @@ def ensure_ml_runtime(
 
     request = Request(asset_url, headers={"User-Agent": "Voctarium-runtime-bootstrap"})
     try:
+        if status_callback is not None:
+            status_callback("downloading")
         with urlopen(request, timeout=120) as response, partial_path.open("wb") as output:
             total_header = response.headers.get("Content-Length")
             total = int(total_header) if total_header and total_header.isdigit() else None
@@ -100,6 +104,8 @@ def ensure_ml_runtime(
                     progress_callback(downloaded, total)
         partial_path.replace(archive_path)
 
+        if status_callback is not None:
+            status_callback("extracting")
         with zipfile.ZipFile(archive_path) as archive:
             _safe_extract(archive, target_internal)
 
@@ -119,6 +125,8 @@ def ensure_ml_runtime(
             json.dumps(marker_payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        if status_callback is not None:
+            status_callback("ready")
         return True
     except Exception as exc:
         raise RuntimeBootstrapError(f"Cannot install ML runtime: {exc}") from exc

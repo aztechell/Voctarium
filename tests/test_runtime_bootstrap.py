@@ -42,6 +42,7 @@ def _runtime_zip() -> bytes:
 def test_ensure_ml_runtime_downloads_and_marks_install(monkeypatch, tmp_path) -> None:
     payload = _runtime_zip()
     progress: list[tuple[int, int | None]] = []
+    statuses: list[str] = []
     monkeypatch.setattr(
         "app.runtime_bootstrap.urlopen",
         lambda *_args, **_kwargs: _FakeResponse(payload),
@@ -52,12 +53,14 @@ def test_ensure_ml_runtime_downloads_and_marks_install(monkeypatch, tmp_path) ->
         runtime_root=tmp_path / "runtime",
         asset_url="https://example.invalid/runtime.zip",
         progress_callback=lambda downloaded, total: progress.append((downloaded, total)),
+        status_callback=statuses.append,
     )
 
     assert installed is True
     assert ml_runtime_ready(tmp_path / "_internal") is True
     assert (tmp_path / "_internal" / ML_RUNTIME_MARKER).is_file()
     assert progress[-1] == (len(payload), len(payload))
+    assert statuses == ["downloading", "extracting", "ready"]
 
 
 def test_ensure_ml_runtime_skips_existing_install(tmp_path) -> None:

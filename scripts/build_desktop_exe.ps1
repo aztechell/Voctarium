@@ -157,7 +157,7 @@ try {
         "-m", "PyInstaller",
         "--name", $ExeName,
         "--icon", "app/static/voctarium-icon.ico",
-        "--splash", "app/static/voctarium-icon.png",
+        "--hidden-import", "tkinter",
         "--onedir",
         "--noconsole",
         "--clean",

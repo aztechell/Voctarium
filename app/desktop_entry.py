@@ -29,9 +29,18 @@ def run_server(host: str, port: int) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--server", action="store_true")
+    parser.add_argument("--startup-splash", action="store_true")
+    parser.add_argument("--splash-status")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     args, _ = parser.parse_known_args()
+
+    if args.startup_splash:
+        if not args.splash_status:
+            return 2
+        from app.desktop_launcher import run_startup_splash_window
+
+        return run_startup_splash_window(args.splash_status)
 
     if args.server:
         return run_server(args.host, args.port)
