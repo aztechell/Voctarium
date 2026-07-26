@@ -91,6 +91,18 @@ class JobManager:
         self._normalize_variant(variant)
         return self.settings.results_dir / f"{job_id}.readable.user.md"
 
+    def _waveform_cache_path(self, job_id: str) -> Path:
+        return self.settings.results_dir / f"{job_id}.waveform.json"
+
+    def _readable_sync_path(self, job_id: str) -> Path:
+        return self.settings.results_dir / f"{job_id}.sync.json"
+
+    def _player_audio_cache_path(self, job_id: str) -> Path:
+        return self.settings.results_dir / f"{job_id}.player.wav"
+
+    def _player_audio_cache_meta_path(self, job_id: str) -> Path:
+        return self.settings.results_dir / f"{job_id}.player.json"
+
     def _set_variant_override(
         self,
         job: JobRecord,
@@ -222,6 +234,153 @@ class JobManager:
             loaded[record.job_id] = record
 
         self._jobs.update(loaded)
+
+    def get_source_file_path(self, job_id: str) -> tuple[dict, Path]:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise JobNotFoundError(f"Job '{job_id}' not found.")
+            snapshot = replace(job)
+
+        payload = self._serialize_job_snapshot(snapshot, now=utcnow(), queue_position=0)
+        if snapshot.status not in (JobStatus.done, JobStatus.failed, JobStatus.cancelled):
+            raise JobStateError("Source playback is available only for terminal jobs.")
+        if not payload["source_available"]:
+            raise FileNotFoundError("Source file is unavailable.")
+        return payload, snapshot.input_path
+
+    def get_waveform_payload(self, job_id: str, *, points: int = 900) -> dict:
+        payload, source_path = self.get_source_file_path(job_id)
+        point_count = max(1, int(points))
+        try:
+            source_stat = source_path.stat()
+        except OSError as exc:
+            raise FileNotFoundError("Source file is unavailable.") from exc
+
+        source_size = int(source_stat.st_size)
+        source_mtime = float(source_stat.st_mtime)
+        cache_path = self._waveform_cache_path(job_id)
+        try:
+            if cache_path.exists():
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                if (
+                    isinstance(cached, dict)
+                    and int(cached.get("points", 0) or 0) == point_count
+                    and int(cached.get("source_size", -1) or -1) == source_size
+                    and float(cached.get("source_mtime", -1.0) or -1.0) == source_mtime
+                ):
+                    return cached
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            pass
+
+        try:
+            waveform = self.ffmpeg_service.extract_waveform(source_path, points=point_count)
+        except Exception as exc:
+            raise JobStateError(f"Cannot build waveform: {exc}") from exc
+
+        raw_peaks = waveform.get("peaks", [])
+        peaks = [
+            min(max(float(value), 0.0), 1.0)
+            for value in raw_peaks
+            if isinstance(value, (int, float))
+        ]
+        if len(peaks) < point_count:
+            peaks.extend([0.0] * (point_count - len(peaks)))
+        elif len(peaks) > point_count:
+            peaks = peaks[:point_count]
+
+        waveform_payload = {
+            "job_id": payload["job_id"],
+            "points": point_count,
+            "peaks": peaks,
+            "duration_seconds": float(waveform.get("duration_seconds", 0.0) or 0.0),
+            "source_size": source_size,
+            "source_mtime": source_mtime,
+        }
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            cache_path.write_text(
+                json.dumps(waveform_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        return waveform_payload
+
+    def get_player_audio_path(self, job_id: str) -> Path:
+        _, source_path = self.get_source_file_path(job_id)
+        try:
+            source_stat = source_path.stat()
+        except OSError as exc:
+            raise FileNotFoundError("Source file is unavailable.") from exc
+
+        source_size = int(source_stat.st_size)
+        source_mtime = float(source_stat.st_mtime)
+        audio_path = self._player_audio_cache_path(job_id)
+        meta_path = self._player_audio_cache_meta_path(job_id)
+        try:
+            if audio_path.exists() and meta_path.exists():
+                cached = json.loads(meta_path.read_text(encoding="utf-8"))
+                if (
+                    isinstance(cached, dict)
+                    and int(cached.get("source_size", -1) or -1) == source_size
+                    and float(cached.get("source_mtime", -1.0) or -1.0) == source_mtime
+                ):
+                    return audio_path
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            pass
+
+        try:
+            self.ffmpeg_service.extract_player_audio(source_path, audio_path)
+        except Exception as exc:
+            raise JobStateError(f"Cannot build player audio: {exc}") from exc
+
+        try:
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "job_id": job_id,
+                        "source_size": source_size,
+                        "source_mtime": source_mtime,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        return audio_path
+
+    def get_readable_sync_payload(self, job_id: str) -> dict:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise JobNotFoundError(f"Job '{job_id}' not found.")
+            snapshot = replace(job)
+
+        payload = self._serialize_job_snapshot(snapshot, now=utcnow(), queue_position=0)
+        if payload["status"] != JobStatus.done.value:
+            raise JobStateError("Result is not ready.")
+        if not payload["readable_available"]:
+            raise JobStateError("Readable document is unavailable.")
+
+        sync_path = self._readable_sync_path(job_id)
+        try:
+            if not sync_path.exists():
+                raise FileNotFoundError("Readable sync is unavailable.")
+            sync_payload = json.loads(sync_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise FileNotFoundError("Readable sync is unavailable.") from exc
+        except OSError as exc:
+            raise FileNotFoundError("Readable sync is unavailable.") from exc
+
+        if not isinstance(sync_payload, dict):
+            raise FileNotFoundError("Readable sync is unavailable.")
+        if not self._is_readable_sync_v2_payload(sync_payload):
+            raise FileNotFoundError("Readable sync is unavailable.")
+        return sync_payload
 
     def get_document_payload(self, job_id: str, variant: str) -> dict:
         normalized_variant = self._normalize_variant(variant)
@@ -590,6 +749,7 @@ class JobManager:
         write_runtime_trace(f"job {job_id}: processing started ({engine_type.value}:{model_id})")
         normalized_path = self.settings.work_dir / f"{job_id}.wav"
         readable_result_path = self.settings.results_dir / f"{job_id}.readable.md"
+        readable_sync_path = self._readable_sync_path(job_id)
         audio_duration_seconds = 0.0
 
         try:
@@ -643,10 +803,50 @@ class JobManager:
                 created_at=created_at,
             )
             write_runtime_trace(f"job {job_id}: readable render begin")
-            readable_paragraphs = self.readable_processor.build_paragraphs(engine_type, segments)
+            readable_document = self.readable_processor.build_document(engine_type, segments)
+            readable_paragraph_chunks = readable_document.paragraphs
             self._raise_if_cancelled(cancel_event)
-            readable_markdown = render_readable_markdown(render_job, readable_paragraphs)
+            readable_markdown = render_readable_markdown(
+                render_job,
+                [chunk.text for chunk in readable_paragraph_chunks],
+            )
             readable_result_path.write_text(readable_markdown, encoding="utf-8")
+            sync_items: list[dict[str, object]] = []
+            for paragraph_index, paragraph in enumerate(readable_paragraph_chunks):
+                for sentence_index, sentence in enumerate(paragraph.sentences):
+                    if not sentence.text.strip():
+                        continue
+                    safe_start = max(0.0, float(sentence.start))
+                    sync_items.append(
+                        {
+                            "id": f"s{len(sync_items)}",
+                            "paragraph_id": f"p{paragraph_index}",
+                            "paragraph_index": paragraph_index,
+                            "sentence_index": sentence_index,
+                            "start": safe_start,
+                            "end": max(safe_start, float(sentence.end)),
+                            "text": sentence.text,
+                        }
+                    )
+            readable_sync_payload = {
+                "version": 2,
+                "granularity": "sentence",
+                "job_id": job_id,
+                "variant": "readable",
+                "paragraphs": [
+                    {
+                        "id": f"p{index}",
+                        "index": index,
+                        "text": paragraph.text,
+                    }
+                    for index, paragraph in enumerate(readable_paragraph_chunks)
+                ],
+                "items": sync_items,
+            }
+            readable_sync_path.write_text(
+                json.dumps(readable_sync_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
             write_runtime_trace(f"job {job_id}: readable markdown saved")
 
             with self._lock:
@@ -663,7 +863,7 @@ class JobManager:
             self._persist_history()
         except JobCancelledError as exc:
             write_runtime_trace(f"job {job_id}: cancelled")
-            for path in (readable_result_path,):
+            for path in (readable_result_path, readable_sync_path):
                 try:
                     path.unlink(missing_ok=True)
                 except OSError:
@@ -679,10 +879,11 @@ class JobManager:
             self._persist_history()
         except Exception as exc:
             write_runtime_trace(f"job {job_id}: failed {exc}")
-            try:
-                readable_result_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            for path in (readable_result_path, readable_sync_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             with self._lock:
                 job = self._jobs.get(job_id)
                 if job is None:
@@ -734,10 +935,30 @@ class JobManager:
         except OSError:
             return False
 
+    @staticmethod
+    def _is_readable_sync_v2_payload(payload: object) -> bool:
+        return (
+            isinstance(payload, dict)
+            and payload.get("version") == 2
+            and payload.get("granularity") == "sentence"
+            and isinstance(payload.get("items"), list)
+        )
+
+    def _readable_sync_available(self, job_id: str) -> bool:
+        sync_path = self._readable_sync_path(job_id)
+        try:
+            if not sync_path.exists():
+                return False
+            payload = json.loads(sync_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        return self._is_readable_sync_v2_payload(payload)
+
     def _serialize_job_snapshot(self, job: JobRecord, *, now: datetime, queue_position: int) -> dict:
         source_exists = self._path_exists(job.input_path)
         readable_exists = self._path_exists(job.readable_result_path)
         readable_override_exists = self._path_exists(job.readable_override_path)
+        readable_sync_exists = self._readable_sync_available(job.job_id)
 
         source_available = source_exists
         readable_available = readable_exists or readable_override_exists
@@ -758,6 +979,7 @@ class JobManager:
             "segments_count": job.segments_count,
             "source_available": source_available,
             "readable_available": readable_available,
+            "readable_sync_available": readable_sync_exists,
             "readable_edited": readable_override_exists,
             "readable_editor_updated_at": (
                 job.readable_editor_updated_at.isoformat()
@@ -775,6 +997,10 @@ class JobManager:
             job.normalized_path,
             job.readable_result_path,
             job.readable_override_path,
+            self._readable_sync_path(job.job_id),
+            self._waveform_cache_path(job.job_id),
+            self._player_audio_cache_path(job.job_id),
+            self._player_audio_cache_meta_path(job.job_id),
         ):
             if path is None:
                 continue

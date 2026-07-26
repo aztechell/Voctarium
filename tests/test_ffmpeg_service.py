@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 from threading import Event
 
 import pytest
@@ -95,3 +96,46 @@ def test_ffmpeg_cancel_stops_running_process(monkeypatch, tmp_path) -> None:
         service.convert_to_wav(input_path, output_path, cancel_event=cancel_event)
 
     assert captured["terminated"] is True
+
+
+def test_extract_waveform_reads_pcm_from_ffmpeg(monkeypatch, tmp_path) -> None:
+    service = FfmpegService(tmp_path / "ffmpeg.exe")
+    service.ffmpeg_path.write_text("stub", encoding="utf-8")
+
+    input_path = tmp_path / "input.mp3"
+    input_path.write_bytes(b"fake")
+    pcm = struct.pack("<hhhh", 0, 32767, -32768, 16384)
+    captured: dict = {}
+
+    class FakePopen:
+        def __init__(self, command, **kwargs):
+            captured["command"] = command
+            captured.update(kwargs)
+            self.returncode = 0
+
+        def communicate(self):
+            return pcm, b""
+
+    monkeypatch.setattr("app.services.ffmpeg_service.subprocess.Popen", FakePopen)
+
+    payload = service.extract_waveform(input_path, points=4)
+
+    assert captured["command"] == [
+        str(service.ffmpeg_path),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "1000",
+        "-f",
+        "s16le",
+        "pipe:1",
+    ]
+    assert payload["points"] == 4
+    assert payload["duration_seconds"] == 0.004
+    assert payload["peaks"] == [0.0, 32767 / 32768, 1.0, 0.5]

@@ -61,7 +61,7 @@ const jobsFeedbackEl = document.getElementById("jobs-feedback");
 
 const TERMINAL_STATUSES = new Set(["done", "failed", "cancelled"]);
 const DEFAULT_DESKTOP_SETTINGS = {
-  cleanup_uploads_on_close: true,
+  cleanup_uploads_on_close: false,
   cleanup_queue_on_close: false,
 };
 

@@ -20,20 +20,65 @@
         <header class="result-header">
           <div class="result-title-block">
             <div class="result-title-row">
-              <a id="back-link" class="ghost-btn compact-btn as-link result-back-link" href="/" data-i18n="app.backToJobs">Назад</a>
+              <a id="back-link" class="icon-action-btn as-link result-back-link" href="/" aria-label="Назад" title="Назад">
+                <svg class="icon-action-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M4.5 11.2 12 5l7.5 6.2" />
+                  <path d="M6.8 10.2v8.5h10.4v-8.5" />
+                  <path d="M10.2 18.7v-5h3.6v5" />
+                </svg>
+              </a>
               <h1 id="result-title" class="result-title">Voctarium</h1>
             </div>
           </div>
 
           <div class="result-actions">
-            <button id="download-link" class="primary-btn compact-btn" type="button" data-i18n="actions.download" disabled>
-              Download .md
+            <div id="download-menu-anchor" class="download-menu-anchor">
+              <button
+                id="download-menu-btn"
+                class="download-menu-btn"
+                type="button"
+                aria-label="Скачать файл"
+                aria-expanded="false"
+                aria-haspopup="true"
+                title="Скачать файл"
+                disabled
+              >
+                <svg class="download-menu-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M6.2 4.8h10.7l1.9 1.9v12.5H5.2V4.8Z" />
+                  <path d="M8.4 4.8v5.1h7.1V4.8" />
+                  <path d="M8.8 14.8h6.4v4.4H8.8Z" />
+                  <path d="M13.8 6.6h1.3" />
+                </svg>
+              </button>
+              <section id="download-menu" class="download-menu-panel" hidden>
+                <button id="download-link" class="download-menu-option" type="button" data-i18n="actions.download" disabled>
+                  Скачать .md
+                </button>
+                <button id="download-pdf-btn" class="download-menu-option" type="button" data-i18n="actions.downloadPdf" disabled>
+                  Скачать PDF
+                </button>
+              </section>
+            </div>
+            <button id="player-toggle-btn" class="icon-action-btn" type="button" aria-label="Скрыть плеер" title="Скрыть плеер" hidden disabled>
+              <svg class="icon-action-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M5 12.7v-.8a7 7 0 0 1 14 0v.8" />
+                <path d="M6.7 12.3h2.2v6.2H6.7A2.2 2.2 0 0 1 4.5 16.3v-1.8a2.2 2.2 0 0 1 2.2-2.2Z" />
+                <path d="M17.3 12.3h-2.2v6.2h2.2a2.2 2.2 0 0 0 2.2-2.2v-1.8a2.2 2.2 0 0 0-2.2-2.2Z" />
+              </svg>
             </button>
-            <button id="download-pdf-btn" class="secondary-btn compact-btn" type="button" data-i18n="actions.downloadPdf" disabled>
-              Download PDF
+            <button id="remove-btn" class="icon-action-btn" type="button" aria-label="Удалить" title="Удалить">
+              <svg class="icon-action-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M5.2 7.2h13.6" />
+                <path d="M9.7 7.2v-2h4.6v2" />
+                <path d="M7.4 7.7 8.3 19h7.4l.9-11.3" />
+                <path d="M10.3 11.2v4.3" />
+                <path d="M13.7 11.2v4.3" />
+              </svg>
             </button>
-            <button id="remove-btn" class="secondary-btn compact-btn" type="button" data-i18n="actions.remove">
-              Remove
+            <button id="toolbar-toggle-btn" class="toolbar-toggle-btn" type="button" aria-label="Свернуть панель" title="Свернуть панель" aria-expanded="true" disabled>
+              <svg class="toolbar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="m6 9 6 6 6-6" />
+              </svg>
             </button>
           </div>
         </header>
@@ -150,6 +195,59 @@
                 <button id="editor-find-close-btn" class="ghost-btn compact-btn" type="button" data-i18n="result.findClose">Закрыть поиск</button>
               </div>
             </section>
+          </div>
+        </section>
+
+        <section id="result-player" class="result-player" hidden>
+          <audio id="result-audio" preload="auto"></audio>
+          <div class="player-transport">
+            <button id="player-rewind-btn" class="player-icon-btn" type="button" aria-label="Назад 5 секунд" title="Назад 5 секунд">
+              <svg class="player-control-icon player-control-icon-fill" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M11 6v12l-7-6Z" />
+                <path d="M20 6v12l-7-6Z" />
+              </svg>
+            </button>
+            <button id="player-play-btn" class="player-play-btn" type="button" aria-label="Воспроизвести" title="Воспроизвести">
+              <span id="player-play-icon" aria-hidden="true">
+                <svg class="player-control-icon player-control-icon-fill" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M9 6v12l10-6Z" />
+                </svg>
+              </span>
+            </button>
+            <button id="player-forward-btn" class="player-icon-btn" type="button" aria-label="Вперед 5 секунд" title="Вперед 5 секунд">
+              <svg class="player-control-icon player-control-icon-fill" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M13 6v12l7-6Z" />
+                <path d="M4 6v12l7-6Z" />
+              </svg>
+            </button>
+            <span id="player-current-time" class="player-time">00:00</span>
+            <canvas id="player-waveform" class="player-waveform" height="48"></canvas>
+            <span id="player-duration" class="player-time">00:00</span>
+          </div>
+          <div class="player-side-controls">
+            <div id="player-rate-anchor" class="player-rate-anchor">
+              <div id="player-rate-popover" class="player-rate-popover" hidden>
+                <button class="player-rate-option" type="button" data-rate="0.5">0.5x</button>
+                <button class="player-rate-option" type="button" data-rate="1">1.0x</button>
+                <button class="player-rate-option" type="button" data-rate="1.2">1.2x</button>
+                <button class="player-rate-option" type="button" data-rate="1.5">1.5x</button>
+                <button class="player-rate-option" type="button" data-rate="1.7">1.7x</button>
+                <button class="player-rate-option" type="button" data-rate="2">2x</button>
+              </div>
+              <button id="player-rate-btn" class="player-rate-btn" type="button" aria-label="Скорость воспроизведения" title="Скорость воспроизведения" aria-haspopup="true" aria-expanded="false">1.0x</button>
+            </div>
+            <div id="player-volume-anchor" class="player-volume-anchor">
+              <div id="player-volume-popover" class="player-volume-popover" hidden>
+                <input id="player-volume-input" class="player-volume" type="range" min="0" max="1" step="0.01" value="1" orient="vertical" aria-label="Громкость" />
+              </div>
+              <button id="player-mute-btn" class="player-icon-btn player-volume-btn" type="button" aria-label="Громкость" title="Громкость" aria-haspopup="true" aria-expanded="false">
+                <svg class="player-control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M4 10v4h4l5 4V6l-5 4Z" />
+                  <path d="M16 9a4 4 0 0 1 0 6" />
+                  <path d="M18.5 6.5a8 8 0 0 1 0 11" />
+                </svg>
+              </button>
+            </div>
           </div>
         </section>
       </section>

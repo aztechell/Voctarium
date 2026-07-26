@@ -8,6 +8,21 @@ from app.job_manager import JobManager, JobStateError
 from tests.conftest import FakeASRFactory, FakeFfmpegService, make_test_wav
 
 
+class CountingWaveformFfmpegService(FakeFfmpegService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.waveform_calls = 0
+
+    def extract_waveform(self, input_path, *, points: int = 900) -> dict:
+        del input_path
+        self.waveform_calls += 1
+        return {
+            "points": points,
+            "peaks": [0.5 for _ in range(points)],
+            "duration_seconds": 12.5,
+        }
+
+
 async def wait_for_status(
     manager: JobManager,
     job_id: str,
@@ -120,6 +135,8 @@ def test_cleanup_does_not_remove_old_results(test_settings) -> None:
             stored = manager.get_job(job.job_id)
             assert stored is not None
             assert stored.readable_result_path is not None and stored.readable_result_path.exists()
+            sync_path = test_settings.results_dir / f"{job.job_id}.sync.json"
+            assert sync_path.exists()
             assert stored.input_path.exists()
             with manager._lock:
                 manager._jobs[job.job_id].finished_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
@@ -133,10 +150,12 @@ def test_cleanup_does_not_remove_old_results(test_settings) -> None:
             assert payload["status"] == "done"
             assert payload["source_available"] is True
             assert payload["readable_available"] is True
+            assert payload["readable_sync_available"] is True
             assert "is_expired" not in payload
             assert "expires_at" not in payload
             assert stored.input_path.exists()
             assert stored.readable_result_path.exists()
+            assert sync_path.exists()
         finally:
             await manager.shutdown()
 
@@ -186,6 +205,46 @@ def test_document_override_roundtrip_prefers_override_path(test_settings) -> Non
 
             _, restored_path = manager.get_effective_document_path(job.job_id, "readable")
             assert restored_path.name.endswith(".readable.md")
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_waveform_payload_uses_cache_and_invalidates_on_source_change(test_settings) -> None:
+    async def scenario() -> None:
+        ffmpeg = CountingWaveformFfmpegService()
+        manager = JobManager(
+            test_settings,
+            ffmpeg_service=ffmpeg,
+            asr_factory=FakeASRFactory(),
+        )
+        await manager.start()
+        try:
+            input_file = test_settings.uploads_dir / "waveform-cache.wav"
+            make_test_wav(input_file)
+            job, _ = manager.create_job(
+                input_path=input_file,
+                original_filename="waveform-cache.wav",
+                model_id="medium",
+                include_timestamps=False,
+            )
+            await wait_for_status(manager, job.job_id, "done")
+
+            first = manager.get_waveform_payload(job.job_id, points=128)
+            second = manager.get_waveform_payload(job.job_id, points=128)
+            assert first == second
+            assert ffmpeg.waveform_calls == 1
+            assert len(first["peaks"]) == 128
+            assert (test_settings.results_dir / f"{job.job_id}.waveform.json").exists()
+
+            stored = manager.get_job(job.job_id)
+            assert stored is not None
+            stored.input_path.write_bytes(stored.input_path.read_bytes() + b"x")
+
+            refreshed = manager.get_waveform_payload(job.job_id, points=128)
+            assert refreshed["source_size"] != first["source_size"]
+            assert ffmpeg.waveform_calls == 2
         finally:
             await manager.shutdown()
 

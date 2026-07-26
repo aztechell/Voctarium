@@ -47,6 +47,19 @@ class FakeFfmpegService:
         shutil.copyfile(input_path, output_path)
         return 5.0
 
+    def extract_waveform(self, input_path: Path, *, points: int = 900) -> dict:
+        del input_path
+        return {
+            "points": points,
+            "peaks": [0.25 if index % 2 else 0.75 for index in range(points)],
+            "duration_seconds": 5.0,
+        }
+
+    def extract_player_audio(self, input_path: Path, output_path: Path) -> float:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(input_path, output_path)
+        return 5.0
+
 
 class FakeEngine:
     def __init__(self, recorder: list[str], *, fail: bool = False, delay_seconds: float = 0.0) -> None:

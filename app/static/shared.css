@@ -125,6 +125,10 @@ body.result-page {
   overflow: hidden;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 button,
 input,
 select,

@@ -1,6 +1,11 @@
 ﻿from __future__ import annotations
 
-from app.readable_text import ReadableTextProcessor, build_readable_paragraphs
+from app.readable_text import (
+    ReadableTextProcessor,
+    build_readable_document,
+    build_readable_paragraph_chunks,
+    build_readable_paragraphs,
+)
 from app.types import EngineType, TranscriptSegment
 
 
@@ -45,6 +50,65 @@ def test_build_readable_paragraphs_for_faster_whisper_merges_sentences_into_para
     assert paragraphs[0].endswith(".")
     assert "Сегодня разберем тему интеллекта" in paragraphs[0]
     assert paragraphs[1].startswith("Во-первых")
+
+
+def test_build_readable_paragraph_chunks_keep_paragraph_timing() -> None:
+    segments = [
+        TranscriptSegment(start=0.0, end=1.0, text="итак, друзья, всем привет."),
+        TranscriptSegment(start=1.1, end=2.0, text="сегодня разберем тему интеллекта"),
+        TranscriptSegment(start=2.1, end=3.0, text="и посмотрим, как это работает."),
+        TranscriptSegment(start=6.0, end=7.0, text="во-первых, важен контекст."),
+    ]
+
+    chunks = build_readable_paragraph_chunks(EngineType.faster_whisper, segments)
+
+    assert len(chunks) == 2
+    assert chunks[0].start == 0.0
+    assert chunks[0].end == 3.0
+    assert chunks[0].text.startswith("Итак")
+    assert [sentence.start for sentence in chunks[0].sentences] == [0.0, 1.1]
+    assert chunks[0].sentences[-1].end == 3.0
+    assert chunks[1].start == 6.0
+    assert chunks[1].end == 7.0
+    assert chunks[1].text.startswith("Во-первых")
+    assert chunks[1].sentences[0].start == 6.0
+
+
+def test_build_readable_document_exposes_paragraph_sentences() -> None:
+    segments = [
+        TranscriptSegment(start=0.0, end=1.0, text="первое предложение."),
+        TranscriptSegment(start=1.0, end=2.0, text="второе предложение."),
+    ]
+
+    document = build_readable_document(EngineType.faster_whisper, segments)
+
+    assert len(document.paragraphs) == 1
+    assert document.paragraphs[0].text == "Первое предложение. Второе предложение."
+    assert [sentence.text for sentence in document.paragraphs[0].sentences] == [
+        "Первое предложение.",
+        "Второе предложение.",
+    ]
+
+
+def test_punctuator_sentences_get_distinct_timing_from_word_alignment() -> None:
+    segments = [
+        TranscriptSegment(start=0.0, end=1.0, text="мы обсудим тему интеллекта"),
+        TranscriptSegment(start=1.0, end=2.0, text="итак дальше важен контекст"),
+    ]
+
+    chunks = build_readable_paragraph_chunks(
+        EngineType.faster_whisper,
+        segments,
+        punctuator=FakePunctuator(),
+    )
+    sentences = [sentence for paragraph in chunks for sentence in paragraph.sentences]
+
+    assert len(sentences) == 2
+    assert sentences[0].text == "Мы обсудим тему интеллекта."
+    assert sentences[1].text == "Итак дальше важен контекст."
+    assert sentences[0].start == 0.0
+    assert sentences[0].end <= sentences[1].start
+    assert sentences[1].end == 2.0
 
 
 def test_build_readable_paragraphs_for_faster_whisper_adds_terminal_punctuation() -> None:

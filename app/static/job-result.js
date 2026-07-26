@@ -13,6 +13,7 @@
 
 const root = document.getElementById("result-root");
 const resultTitleEl = document.getElementById("result-title");
+const backLink = document.getElementById("back-link");
 const viewToggleBtn = document.getElementById("view-toggle-btn");
 const infoToggleBtn = document.getElementById("info-toggle-btn");
 const readerControlsPanelEl = document.getElementById("reader-controls-panel");
@@ -31,8 +32,13 @@ const readerJustifyLeftBtn = document.getElementById("reader-justify-left-btn");
 const readerJustifyFullBtn = document.getElementById("reader-justify-full-btn");
 const readerJustifyHyphenBtn = document.getElementById("reader-justify-hyphen-btn");
 const readerParagraphGapInput = document.getElementById("reader-paragraph-gap-input");
+const downloadMenuAnchorEl = document.getElementById("download-menu-anchor");
+const downloadMenuBtn = document.getElementById("download-menu-btn");
+const downloadMenuEl = document.getElementById("download-menu");
 const downloadLink = document.getElementById("download-link");
 const downloadPdfBtn = document.getElementById("download-pdf-btn");
+const playerToggleBtn = document.getElementById("player-toggle-btn");
+const toolbarToggleBtn = document.getElementById("toolbar-toggle-btn");
 const removeBtn = document.getElementById("remove-btn");
 const editorToolbarEl = document.getElementById("editor-toolbar");
 const editorFindbarEl = document.getElementById("editor-findbar");
@@ -58,11 +64,59 @@ const editorFindNextBtn = document.getElementById("editor-find-next-btn");
 const editorFindCloseBtn = document.getElementById("editor-find-close-btn");
 const viewPopoverAnchorEl = document.getElementById("view-popover-anchor");
 const infoPopoverAnchorEl = document.getElementById("info-popover-anchor");
+const resultPlayerEl = document.getElementById("result-player");
+const resultAudioEl = document.getElementById("result-audio");
+const playerRewindBtn = document.getElementById("player-rewind-btn");
+const playerPlayBtn = document.getElementById("player-play-btn");
+const playerPlayIconEl = document.getElementById("player-play-icon");
+const playerForwardBtn = document.getElementById("player-forward-btn");
+const playerCurrentTimeEl = document.getElementById("player-current-time");
+const playerDurationEl = document.getElementById("player-duration");
+const playerWaveformEl = document.getElementById("player-waveform");
+const playerRateAnchorEl = document.getElementById("player-rate-anchor");
+const playerRatePopoverEl = document.getElementById("player-rate-popover");
+const playerRateBtn = document.getElementById("player-rate-btn");
+const playerRateOptions = Array.from(document.querySelectorAll(".player-rate-option"));
+const playerVolumeAnchorEl = document.getElementById("player-volume-anchor");
+const playerVolumePopoverEl = document.getElementById("player-volume-popover");
+const playerMuteBtn = document.getElementById("player-mute-btn");
+const playerVolumeInput = document.getElementById("player-volume-input");
 
 const TERMINAL_STATUSES = new Set(["done", "failed", "cancelled"]);
 const INLINE_BOLD_RE = /\*\*([^*]+)\*\*/g;
 const INLINE_ITALIC_RE = /\*([^*]+)\*/g;
 const ORDERED_LIST_RE = /^\d+\.\s+(.+)$/;
+const TOOLBAR_COLLAPSED_KEY = "voctarium.result.toolbarCollapsed";
+const PLAYER_VISIBLE_KEY = "voctarium.result.playerVisible";
+const PLAYER_VOLUME_KEY = "voctarium.result.playerVolume";
+const PLAYER_MUTED_KEY = "voctarium.result.playerMuted";
+const PLAYER_RATE_KEY = "voctarium.result.playerRate";
+const PLAYER_RATES = [0.5, 1, 1.2, 1.5, 1.7, 2];
+const ICON_PLAY = `
+  <svg class="player-control-icon player-control-icon-fill" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M9 6v12l10-6Z" />
+  </svg>
+`;
+const ICON_PAUSE = `
+  <svg class="player-control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M9 6v12" />
+    <path d="M15 6v12" />
+  </svg>
+`;
+const ICON_VOLUME = `
+  <svg class="player-control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M4 10v4h4l5 4V6l-5 4Z" />
+    <path d="M16 9a4 4 0 0 1 0 6" />
+    <path d="M18.5 6.5a8 8 0 0 1 0 11" />
+  </svg>
+`;
+const ICON_VOLUME_MUTED = `
+  <svg class="player-control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M4 10v4h4l5 4V6l-5 4Z" />
+    <path d="m18 10 4 4" />
+    <path d="m22 10-4 4" />
+  </svg>
+`;
 const FORMATTING_BUTTONS = [
   editorBoldBtn,
   editorItalicBtn,
@@ -113,9 +167,33 @@ const state = {
   metaTimer: null,
   actionError: "",
   actionWarning: "",
+  downloadMenuOpen: false,
   infoOpen: false,
   viewOpen: false,
   findOpen: false,
+  toolbarCollapsed: window.localStorage.getItem(TOOLBAR_COLLAPSED_KEY) === "true",
+  playerVisible: window.localStorage.getItem(PLAYER_VISIBLE_KEY) !== "false",
+  player: {
+    sourceJobId: null,
+    waveformJobId: null,
+    waveform: null,
+    waveformLoading: false,
+    seeking: false,
+    volumeOpen: false,
+    rateOpen: false,
+  },
+  sync: {
+    jobId: null,
+    loaded: false,
+    loading: false,
+    available: false,
+    paragraphs: [],
+    items: [],
+    byId: new Map(),
+    activeId: null,
+    seekModifier: false,
+    suppressAutoScrollUntil: 0,
+  },
   documents: {
     readable: createDocumentState("readable"),
   },
@@ -176,6 +254,18 @@ function buildPdfEndpoint(jobId) {
   params.set("paragraph_gap", options.paragraph_gap ? "true" : "false");
   params.set("content_width_percent", String(options.content_width_percent));
   return `${getPdfEndpoint(jobId)}?${params.toString()}`;
+}
+
+function getSourceEndpoint(jobId) {
+  return `/api/jobs/${encodeURIComponent(jobId)}/source-audio`;
+}
+
+function getWaveformEndpoint(jobId, points = 900) {
+  return `/api/jobs/${encodeURIComponent(jobId)}/waveform?points=${encodeURIComponent(points)}`;
+}
+
+function getReadableSyncEndpoint(jobId) {
+  return `/api/jobs/${encodeURIComponent(jobId)}/sync/readable`;
 }
 
 function renderBanner(html = "") {
@@ -382,18 +472,50 @@ async function downloadInBrowser(endpoint, filename) {
   }
 }
 
+function renderDownloadMenu() {
+  const enabled = Boolean(state.job && isReadableAvailable(state.job));
+  if (!enabled) {
+    state.downloadMenuOpen = false;
+  }
+  if (downloadMenuBtn) {
+    downloadMenuBtn.disabled = !enabled;
+    downloadMenuBtn.classList.toggle("disabled", !enabled);
+    downloadMenuBtn.classList.toggle("active", enabled && state.downloadMenuOpen);
+    downloadMenuBtn.setAttribute("aria-expanded", String(enabled && state.downloadMenuOpen));
+    downloadMenuBtn.setAttribute("aria-label", t("actions.downloadMenu"));
+    downloadMenuBtn.setAttribute("title", t("actions.downloadMenu"));
+  }
+  if (downloadMenuEl) {
+    downloadMenuEl.hidden = !enabled || !state.downloadMenuOpen;
+  }
+}
+
+function renderActionLabels() {
+  backLink?.setAttribute("aria-label", t("app.backToJobs"));
+  backLink?.setAttribute("title", t("app.backToJobs"));
+  removeBtn?.setAttribute("aria-label", t("actions.remove"));
+  removeBtn?.setAttribute("title", t("actions.remove"));
+}
+
 function setDownloadDisabled() {
+  state.downloadMenuOpen = false;
+  downloadMenuBtn.disabled = true;
+  downloadMenuBtn.classList.add("disabled");
   downloadLink.disabled = true;
   downloadLink.classList.add("disabled");
   downloadPdfBtn.disabled = true;
   downloadPdfBtn.classList.add("disabled");
+  renderDownloadMenu();
 }
 
 function setDownloadEnabled() {
+  downloadMenuBtn.disabled = false;
+  downloadMenuBtn.classList.remove("disabled");
   downloadLink.disabled = false;
   downloadLink.classList.remove("disabled");
   downloadPdfBtn.disabled = false;
   downloadPdfBtn.classList.remove("disabled");
+  renderDownloadMenu();
 }
 
 function splitDocumentScaffold(markdown) {
@@ -560,6 +682,447 @@ function getEditorSurface() {
   return resultContentEl.querySelector(".editor-surface");
 }
 
+function normalizeSyncText(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function unwrapElement(element) {
+  const parent = element.parentNode;
+  if (!parent) {
+    return;
+  }
+  while (element.firstChild) {
+    parent.insertBefore(element.firstChild, element);
+  }
+  parent.removeChild(element);
+  parent.normalize();
+}
+
+function unwrapSyncSentenceSpans(rootEl) {
+  rootEl.querySelectorAll("span.sync-sentence").forEach(unwrapElement);
+}
+
+function resetReadableSync() {
+  const surface = getEditorSurface();
+  if (surface) {
+    surface.classList.remove("sync-seek-modifier");
+    unwrapSyncSentenceSpans(surface);
+    surface.querySelectorAll("[data-sync-id]").forEach((node) => {
+      node.classList.remove("sync-paragraph", "sync-sentence", "sync-active");
+      delete node.dataset.syncId;
+      delete node.dataset.syncStart;
+      delete node.dataset.syncEnd;
+    });
+  }
+  state.sync.jobId = null;
+  state.sync.loaded = false;
+  state.sync.loading = false;
+  state.sync.available = false;
+  state.sync.paragraphs = [];
+  state.sync.items = [];
+  state.sync.byId = new Map();
+  state.sync.activeId = null;
+}
+
+function setReadableSyncPayload(jobId, payload) {
+  if (payload?.version !== 2 || payload?.granularity !== "sentence") {
+    resetReadableSync();
+    return;
+  }
+
+  const paragraphs = Array.isArray(payload.paragraphs)
+    ? payload.paragraphs.map((paragraph, index) => ({
+      id: String(paragraph?.id || `p${index}`),
+      index: Number.isInteger(paragraph?.index) ? paragraph.index : index,
+      text: String(paragraph?.text || "").trim(),
+      normalizedText: normalizeSyncText(paragraph?.text || ""),
+    })).filter((paragraph) => paragraph.text)
+    : [];
+
+  const items = Array.isArray(payload.items)
+    ? payload.items.map((item, index) => {
+      const id = String(item?.id || `s${index}`);
+      const start = Number(item?.start);
+      const end = Number(item?.end);
+      const text = String(item?.text || "").trim();
+      if (!id || !Number.isFinite(start) || !Number.isFinite(end) || !text) {
+        return null;
+      }
+      const safeStart = Math.max(0, start);
+      return {
+        id,
+        index,
+        paragraphId: String(item?.paragraph_id || ""),
+        paragraphIndex: Number.isInteger(item?.paragraph_index) ? item.paragraph_index : 0,
+        sentenceIndex: Number.isInteger(item?.sentence_index) ? item.sentence_index : index,
+        start: safeStart,
+        end: Math.max(safeStart, end),
+        text,
+        normalizedText: normalizeSyncText(text),
+      };
+    }).filter(Boolean).map((item, index) => ({ ...item, index }))
+    : [];
+
+  state.sync.jobId = jobId;
+  state.sync.loaded = true;
+  state.sync.available = items.length > 0;
+  state.sync.paragraphs = paragraphs;
+  state.sync.items = items;
+  state.sync.byId = new Map(items.map((item) => [item.id, item]));
+  state.sync.activeId = null;
+}
+
+async function loadReadableSync({ force = false } = {}) {
+  const job = state.job;
+  if (!job || job.status !== "done" || !job.readable_available || !job.readable_sync_available) {
+    resetReadableSync();
+    return;
+  }
+  if (!force && state.sync.loaded && state.sync.jobId === job.job_id) {
+    return;
+  }
+  if (state.sync.loading) {
+    return;
+  }
+
+  state.sync.loading = true;
+  try {
+    const response = await fetch(getReadableSyncEndpoint(job.job_id));
+    if (!response.ok) {
+      resetReadableSync();
+      return;
+    }
+    const payload = await response.json();
+    setReadableSyncPayload(job.job_id, payload);
+  } catch {
+    resetReadableSync();
+  } finally {
+    state.sync.loading = false;
+  }
+}
+
+function editorTextBlocks(surface) {
+  return Array.from(surface.children)
+    .filter((node) => {
+      if (!(node instanceof HTMLElement)) {
+        return false;
+      }
+      if (!["P", "DIV"].includes(node.tagName)) {
+        return false;
+      }
+      if (!normalizeSyncText(node.textContent)) {
+        return false;
+      }
+      return !node.querySelector("p, div, li, ul, ol");
+    });
+}
+
+function buildNormalizedOffsetMap(value) {
+  const raw = String(value || "");
+  let normalized = "";
+  const offsets = [];
+  let previousWasSpace = false;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (/\s/u.test(char)) {
+      if (normalized && !previousWasSpace) {
+        normalized += " ";
+        offsets.push(index);
+        previousWasSpace = true;
+      }
+      continue;
+    }
+    normalized += char.toLocaleLowerCase();
+    offsets.push(index);
+    previousWasSpace = false;
+  }
+  if (normalized.endsWith(" ")) {
+    normalized = normalized.slice(0, -1);
+    offsets.pop();
+  }
+  return { normalized, offsets };
+}
+
+function findTextRange(rawText, targetText, fromOffset = 0) {
+  const source = String(rawText || "");
+  const target = String(targetText || "").trim();
+  if (!source || !target) {
+    return null;
+  }
+
+  const exactIndex = source.toLocaleLowerCase().indexOf(target.toLocaleLowerCase(), Math.max(0, fromOffset));
+  if (exactIndex !== -1) {
+    return { start: exactIndex, end: exactIndex + target.length };
+  }
+
+  const sourceMap = buildNormalizedOffsetMap(source);
+  const normalizedTarget = normalizeSyncText(target);
+  if (!sourceMap.normalized || !normalizedTarget) {
+    return null;
+  }
+
+  let searchIndex = 0;
+  while (searchIndex < sourceMap.normalized.length) {
+    const matchIndex = sourceMap.normalized.indexOf(normalizedTarget, searchIndex);
+    if (matchIndex === -1) {
+      return null;
+    }
+    const rawStart = sourceMap.offsets[matchIndex];
+    const rawEnd = sourceMap.offsets[matchIndex + normalizedTarget.length - 1] + 1;
+    if (rawStart >= Math.max(0, fromOffset - 2)) {
+      return { start: rawStart, end: rawEnd };
+    }
+    searchIndex = matchIndex + Math.max(1, normalizedTarget.length);
+  }
+  return null;
+}
+
+function collectTextNodeRanges(rootEl) {
+  const ranges = [];
+  let offset = 0;
+  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const length = node.nodeValue.length;
+    ranges.push({ node, start: offset, end: offset + length });
+    offset += length;
+  }
+  return ranges;
+}
+
+function wrapTextRange(rootEl, start, end, item) {
+  if (end <= start) {
+    return;
+  }
+  const ranges = collectTextNodeRanges(rootEl)
+    .filter((range) => range.end > start && range.start < end)
+    .reverse();
+
+  ranges.forEach((range) => {
+    const localStart = Math.max(0, start - range.start);
+    const localEnd = Math.min(range.node.nodeValue.length, end - range.start);
+    if (localEnd <= localStart) {
+      return;
+    }
+    let targetNode = range.node;
+    if (localEnd < targetNode.nodeValue.length) {
+      targetNode.splitText(localEnd);
+    }
+    if (localStart > 0) {
+      targetNode = targetNode.splitText(localStart);
+    }
+    if (!targetNode.nodeValue) {
+      return;
+    }
+    const span = document.createElement("span");
+    span.className = "sync-sentence";
+    span.dataset.syncId = item.id;
+    span.dataset.syncStart = String(item.start);
+    span.dataset.syncEnd = String(item.end);
+    targetNode.parentNode.insertBefore(span, targetNode);
+    span.appendChild(targetNode);
+  });
+}
+
+function wrapSentenceItemsInBlock(block, items) {
+  const ranges = [];
+  const rawText = block.textContent || "";
+  let cursor = 0;
+  items.forEach((item) => {
+    const range = findTextRange(rawText, item.text, cursor);
+    if (!range) {
+      return;
+    }
+    ranges.push({ ...range, item });
+    cursor = range.end;
+  });
+
+  ranges.reverse().forEach((range) => {
+    wrapTextRange(block, range.start, range.end, range.item);
+  });
+}
+
+function applyReadableSyncToEditorSurface() {
+  const surface = getEditorSurface();
+  if (!surface) {
+    return;
+  }
+
+  unwrapSyncSentenceSpans(surface);
+  surface.classList.toggle("sync-seek-modifier", state.sync.seekModifier && state.sync.available);
+
+  if (!state.sync.available || !state.sync.items.length) {
+    state.sync.activeId = null;
+    return;
+  }
+
+  const blocks = editorTextBlocks(surface);
+  const usedParagraphIndexes = new Set();
+  let paragraphCursor = 0;
+
+  blocks.forEach((block) => {
+    const normalized = normalizeSyncText(block.textContent);
+    let paragraph = state.sync.paragraphs.find((candidate) => (
+      candidate.normalizedText === normalized && !usedParagraphIndexes.has(candidate.index)
+    ));
+
+    if (!paragraph) {
+      while (
+        paragraphCursor < state.sync.paragraphs.length
+        && usedParagraphIndexes.has(state.sync.paragraphs[paragraphCursor].index)
+      ) {
+        paragraphCursor += 1;
+      }
+      paragraph = state.sync.paragraphs[paragraphCursor] || null;
+    }
+
+    if (!paragraph) {
+      return;
+    }
+    usedParagraphIndexes.add(paragraph.index);
+    paragraphCursor = Math.max(paragraphCursor, paragraph.index + 1);
+    const sentenceItems = state.sync.items.filter((item) => item.paragraphIndex === paragraph.index);
+    wrapSentenceItemsInBlock(block, sentenceItems);
+  });
+
+  updateActiveSyncFromPlayback({ scroll: false });
+}
+
+function setSyncSeekModifier(enabled) {
+  state.sync.seekModifier = Boolean(enabled);
+  const surface = getEditorSurface();
+  if (surface) {
+    surface.classList.toggle("sync-seek-modifier", state.sync.seekModifier && state.sync.available);
+  }
+}
+
+function getSyncElementsById(syncId) {
+  const surface = getEditorSurface();
+  if (!surface || !syncId) {
+    return [];
+  }
+  return Array.from(surface.querySelectorAll("span.sync-sentence[data-sync-id]"))
+    .filter((node) => node.dataset.syncId === syncId);
+}
+
+function getFirstSyncElementById(syncId) {
+  return getSyncElementsById(syncId)[0] || null;
+}
+
+function getSyncItemAtTime(seconds) {
+  const current = Number(seconds);
+  if (!Number.isFinite(current) || !state.sync.available) {
+    return null;
+  }
+
+  let lastStarted = null;
+  for (const item of state.sync.items) {
+    if (current >= item.start && current <= item.end) {
+      return item;
+    }
+    if (current >= item.start) {
+      lastStarted = item;
+      continue;
+    }
+    break;
+  }
+  return lastStarted;
+}
+
+function shouldAutoscrollSync() {
+  if (!resultAudioEl || resultAudioEl.paused || state.findOpen) {
+    return false;
+  }
+  if (Date.now() < state.sync.suppressAutoScrollUntil) {
+    return false;
+  }
+  const surface = getEditorSurface();
+  const active = document.activeElement;
+  return !(surface && active && surface.contains(active));
+}
+
+function scrollActiveSyncIntoView() {
+  if (!shouldAutoscrollSync()) {
+    return;
+  }
+  const activeNode = getFirstSyncElementById(state.sync.activeId);
+  if (!activeNode) {
+    return;
+  }
+  const container = resultContentEl;
+  const nodeRect = activeNode.getBoundingClientRect();
+  const containerRect = container.getBoundingClientRect();
+  const topGap = nodeRect.top - containerRect.top;
+  const bottomGap = nodeRect.bottom - containerRect.bottom;
+  const targetOffset = Math.max(28, containerRect.height * 0.18);
+
+  if (topGap < targetOffset || bottomGap > -targetOffset) {
+    container.scrollTo({
+      top: Math.max(0, container.scrollTop + topGap - targetOffset),
+      behavior: "smooth",
+    });
+  }
+}
+
+function updateActiveSyncFromPlayback({ scroll = true } = {}) {
+  if (!state.sync.available || !resultAudioEl) {
+    return;
+  }
+  const item = getSyncItemAtTime(resultAudioEl.currentTime);
+  const nextId = item?.id || null;
+  if (state.sync.activeId === nextId) {
+    if (scroll && nextId) {
+      scrollActiveSyncIntoView();
+    }
+    return;
+  }
+
+  getSyncElementsById(state.sync.activeId).forEach((node) => node.classList.remove("sync-active"));
+  state.sync.activeId = nextId;
+  getSyncElementsById(nextId).forEach((node) => node.classList.add("sync-active"));
+  if (scroll && nextId) {
+    scrollActiveSyncIntoView();
+  }
+}
+
+function suppressSyncAutoscroll(ms = 4000) {
+  state.sync.suppressAutoScrollUntil = Date.now() + ms;
+}
+
+function seekPlayerToSyncItem(item) {
+  if (!item || !isSourcePlayable(state.job)) {
+    return;
+  }
+  ensurePlayerSource(state.job);
+  const wasPlaying = !resultAudioEl.paused;
+  try {
+    resultAudioEl.currentTime = Math.max(0, item.start);
+  } catch {
+    resultAudioEl.addEventListener("loadedmetadata", () => {
+      resultAudioEl.currentTime = Math.max(0, item.start);
+    }, { once: true });
+  }
+  updateActiveSyncFromPlayback({ scroll: false });
+  renderPlayerControls();
+  if (wasPlaying) {
+    void resultAudioEl.play().catch((error) => {
+      state.actionError = t("result.playerPlayError", { message: error?.message || String(error) });
+      renderJobBanner();
+    });
+  }
+}
+
 function getPlainEditorText(surface) {
   if (!surface) {
     return "";
@@ -649,10 +1212,21 @@ function renderJobBanner() {
 function renderEditorStatus() {
   const doc = getActiveDocumentState();
   const editorVisible = isReadableAvailable(state.job);
-  editorToolbarEl.hidden = !editorVisible;
-  resultReaderStageEl.classList.toggle("has-search", editorVisible && state.findOpen);
-  editorSaveBtn.disabled = !editorVisible || doc.saveState === "saving" || !doc.loaded || !doc.dirty;
-  editorFindBtn.classList.toggle("active", editorVisible && state.findOpen);
+  const toolbarVisible = editorVisible && !state.toolbarCollapsed;
+  editorToolbarEl.hidden = !toolbarVisible;
+  resultReaderStageEl.classList.toggle("has-search", toolbarVisible && state.findOpen);
+  toolbarToggleBtn.disabled = !editorVisible;
+  const toolbarToggleLabel = state.toolbarCollapsed ? t("result.toolbarShow") : t("result.toolbarHide");
+  toolbarToggleBtn.setAttribute("aria-label", toolbarToggleLabel);
+  toolbarToggleBtn.setAttribute("title", toolbarToggleLabel);
+  toolbarToggleBtn.setAttribute("aria-expanded", String(toolbarVisible));
+  toolbarToggleBtn.classList.toggle("active", toolbarVisible);
+  toolbarToggleBtn.classList.toggle("is-collapsed", state.toolbarCollapsed);
+  FORMATTING_BUTTONS.forEach((button) => {
+    button.disabled = !toolbarVisible;
+  });
+  editorSaveBtn.disabled = !toolbarVisible || doc.saveState === "saving" || !doc.loaded || !doc.dirty;
+  editorFindBtn.classList.toggle("active", toolbarVisible && state.findOpen);
   if (!editorVisible) {
     editorFindbarEl.hidden = true;
     editorSaveStatusEl.textContent = t("result.editorStatusIdle");
@@ -662,10 +1236,247 @@ function renderEditorStatus() {
   }
   editorSaveStatusEl.textContent = getEditorStatusLabel(doc.saveState);
   editorDirtyIndicatorEl.hidden = !doc.dirty;
-  editorFindbarEl.hidden = !state.findOpen;
+  editorFindbarEl.hidden = !toolbarVisible || !state.findOpen;
   editorFindInput.placeholder = t("result.findPlaceholder");
   renderWordCount();
   renderFindStatus();
+}
+
+function isSourcePlayable(job) {
+  return Boolean(job) && TERMINAL_STATUSES.has(job.status) && job.source_available;
+}
+
+function formatPlayerTime(seconds) {
+  const value = Math.max(0, Number(seconds) || 0);
+  const totalSeconds = Math.floor(value);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const rest = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function getPlayerDuration() {
+  if (Number.isFinite(resultAudioEl.duration) && resultAudioEl.duration > 0) {
+    return resultAudioEl.duration;
+  }
+  return Number(state.player.waveform?.duration_seconds) || 0;
+}
+
+function normalizePlayerRate(value) {
+  const rawRate = Number(value);
+  if (!Number.isFinite(rawRate)) {
+    return 1;
+  }
+  return PLAYER_RATES.reduce((closest, candidate) => (
+    Math.abs(candidate - rawRate) < Math.abs(closest - rawRate) ? candidate : closest
+  ), 1);
+}
+
+function formatPlayerRate(rate) {
+  const normalized = normalizePlayerRate(rate);
+  return normalized === 1 ? "1.0x" : `${normalized}x`;
+}
+
+function setPlayerRate(rate, { persist = true } = {}) {
+  const normalized = normalizePlayerRate(rate);
+  resultAudioEl.playbackRate = normalized;
+  if (persist) {
+    window.localStorage.setItem(PLAYER_RATE_KEY, String(normalized));
+  }
+  renderPlayerControls();
+}
+
+function drawPlayerWaveform() {
+  if (!playerWaveformEl) {
+    return;
+  }
+  const canvas = playerWaveformEl;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.floor(rect.width));
+  const height = Math.max(1, Math.floor(rect.height));
+  const ratio = window.devicePixelRatio || 1;
+  const nextWidth = Math.floor(width * ratio);
+  const nextHeight = Math.floor(height * ratio);
+  if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
+    canvas.width = nextWidth;
+    canvas.height = nextHeight;
+  }
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const styles = getComputedStyle(document.body);
+  const muted = styles.getPropertyValue("--muted").trim() || "#98a7ba";
+  const accent = styles.getPropertyValue("--accent").trim() || "#67adff";
+  const peaks = Array.isArray(state.player.waveform?.peaks) ? state.player.waveform.peaks : [];
+  const duration = getPlayerDuration();
+  const progress = duration > 0 ? Math.max(0, Math.min(1, resultAudioEl.currentTime / duration)) : 0;
+  const center = height / 2;
+  const gap = 2;
+  const barWidth = 2;
+  const stride = barWidth + gap;
+  const barCount = Math.max(1, Math.floor(width / stride));
+
+  for (let index = 0; index < barCount; index += 1) {
+    const peakIndex = peaks.length ? Math.min(peaks.length - 1, Math.floor(index * peaks.length / barCount)) : index;
+    const fallback = 0.18 + 0.16 * Math.sin(index * 0.47) ** 2;
+    const peak = peaks.length ? Math.max(0.04, Number(peaks[peakIndex]) || 0) : fallback;
+    const barHeight = Math.max(3, peak * (height - 8));
+    const x = index * stride;
+    const y = center - barHeight / 2;
+    ctx.fillStyle = index / barCount <= progress ? accent : muted;
+    ctx.globalAlpha = index / barCount <= progress ? 0.95 : 0.58;
+    ctx.fillRect(x, y, barWidth, barHeight);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function renderPlayerControls() {
+  const playable = isSourcePlayable(state.job);
+  const visible = playable && state.playerVisible;
+  resultPlayerEl.hidden = !visible;
+  playerToggleBtn.hidden = !playable;
+  playerToggleBtn.disabled = !playable;
+  const toggleLabel = state.playerVisible ? t("result.playerHide") : t("result.playerShow");
+  playerToggleBtn.setAttribute("aria-label", toggleLabel);
+  playerToggleBtn.setAttribute("title", toggleLabel);
+  playerToggleBtn.classList.toggle("active", visible);
+
+  if (!playable) {
+    resultAudioEl.pause();
+    resultAudioEl.removeAttribute("src");
+    state.player.sourceJobId = null;
+    state.player.waveformJobId = null;
+    state.player.waveform = null;
+    state.player.rateOpen = false;
+    state.player.volumeOpen = false;
+    playerRatePopoverEl.hidden = true;
+    playerVolumePopoverEl.hidden = true;
+    return;
+  }
+
+  playerRewindBtn.setAttribute("aria-label", t("result.playerRewind"));
+  playerRewindBtn.setAttribute("title", t("result.playerRewind"));
+  playerForwardBtn.setAttribute("aria-label", t("result.playerForward"));
+  playerForwardBtn.setAttribute("title", t("result.playerForward"));
+  const playLabel = resultAudioEl.paused ? t("result.playerPlay") : t("result.playerPause");
+  playerPlayBtn.setAttribute("aria-label", playLabel);
+  playerPlayBtn.setAttribute("title", playLabel);
+  playerPlayIconEl.innerHTML = resultAudioEl.paused ? ICON_PLAY : ICON_PAUSE;
+  const muteLabel = t("result.playerVolume");
+  const rateLabel = t("result.playerRate");
+  const rate = normalizePlayerRate(resultAudioEl.playbackRate || 1);
+  playerRateBtn.textContent = formatPlayerRate(rate);
+  playerRateBtn.setAttribute("aria-label", rateLabel);
+  playerRateBtn.setAttribute("title", rateLabel);
+  playerRateBtn.setAttribute("aria-expanded", String(state.player.rateOpen));
+  playerRatePopoverEl.hidden = !state.player.rateOpen;
+  playerRateOptions.forEach((button) => {
+    const buttonRate = normalizePlayerRate(button.dataset.rate);
+    button.classList.toggle("active", buttonRate === rate);
+    button.setAttribute("aria-pressed", String(buttonRate === rate));
+  });
+  playerMuteBtn.setAttribute("aria-label", muteLabel);
+  playerMuteBtn.setAttribute("title", muteLabel);
+  playerMuteBtn.setAttribute("aria-expanded", String(state.player.volumeOpen));
+  playerMuteBtn.innerHTML = resultAudioEl.muted || resultAudioEl.volume === 0 ? ICON_VOLUME_MUTED : ICON_VOLUME;
+  playerVolumePopoverEl.hidden = !state.player.volumeOpen;
+  playerVolumeInput.value = String(resultAudioEl.volume);
+  playerCurrentTimeEl.textContent = formatPlayerTime(resultAudioEl.currentTime);
+  playerDurationEl.textContent = formatPlayerTime(getPlayerDuration());
+  drawPlayerWaveform();
+}
+
+function ensurePlayerSource(job) {
+  if (!isSourcePlayable(job)) {
+    renderPlayerControls();
+    return;
+  }
+  if (state.player.sourceJobId === job.job_id) {
+    renderPlayerControls();
+    return;
+  }
+  state.player.sourceJobId = job.job_id;
+  state.player.waveformJobId = null;
+  state.player.waveform = null;
+  resultAudioEl.src = getSourceEndpoint(job.job_id);
+  const storedVolumeRaw = window.localStorage.getItem(PLAYER_VOLUME_KEY);
+  const storedVolume = Number(storedVolumeRaw);
+  resultAudioEl.volume = storedVolumeRaw !== null && Number.isFinite(storedVolume) ? Math.max(0, Math.min(1, storedVolume)) : 1;
+  resultAudioEl.muted = window.localStorage.getItem(PLAYER_MUTED_KEY) === "true";
+  setPlayerRate(window.localStorage.getItem(PLAYER_RATE_KEY), { persist: false });
+  playerVolumeInput.value = String(resultAudioEl.volume);
+  loadPlayerWaveform(job);
+  renderPlayerControls();
+}
+
+async function loadPlayerWaveform(job) {
+  if (!isSourcePlayable(job) || state.player.waveformLoading || state.player.waveformJobId === job.job_id) {
+    return;
+  }
+  state.player.waveformLoading = true;
+  try {
+    const response = await fetch(getWaveformEndpoint(job.job_id, 900));
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    state.player.waveform = await response.json();
+    state.player.waveformJobId = job.job_id;
+  } catch {
+    state.player.waveform = null;
+    state.player.waveformJobId = job.job_id;
+  } finally {
+    state.player.waveformLoading = false;
+    renderPlayerControls();
+  }
+}
+
+function setPlayerVisible(visible) {
+  state.playerVisible = Boolean(visible);
+  window.localStorage.setItem(PLAYER_VISIBLE_KEY, String(state.playerVisible));
+  if (!state.playerVisible) {
+    resultAudioEl.pause();
+  }
+  renderPlayerControls();
+}
+
+function seekPlayerFromPointer(event) {
+  const duration = getPlayerDuration();
+  if (duration <= 0) {
+    return;
+  }
+  const rect = playerWaveformEl.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  resultAudioEl.currentTime = ratio * duration;
+  renderPlayerControls();
+  updateActiveSyncFromPlayback({ scroll: false });
+}
+
+async function togglePlayerPlayback() {
+  if (!isSourcePlayable(state.job)) {
+    return;
+  }
+  ensurePlayerSource(state.job);
+  if (resultAudioEl.paused) {
+    try {
+      await resultAudioEl.play();
+      state.actionError = "";
+      renderJobBanner();
+    } catch (error) {
+      state.actionError = t("result.playerPlayError", { message: error?.message || String(error) });
+      renderJobBanner();
+    }
+  } else {
+    resultAudioEl.pause();
+  }
+  renderPlayerControls();
 }
 
 function setDocumentDirty(variant, dirty) {
@@ -856,8 +1667,9 @@ function applyReaderPrefs() {
 }
 
 function renderReaderControls() {
-  readerControlsPanelEl.hidden = !state.viewOpen;
-  viewToggleBtn.classList.toggle("active", state.viewOpen);
+  const controlsVisible = !state.toolbarCollapsed && state.viewOpen;
+  readerControlsPanelEl.hidden = !controlsVisible;
+  viewToggleBtn.classList.toggle("active", controlsVisible);
   readerFontSizeInput.value = String(prefs.readerFontSizePx);
   readerLineCompactBtn.classList.toggle("active", prefs.readerLineHeight === "compact");
   readerLineNormalBtn.classList.toggle("active", prefs.readerLineHeight === "normal");
@@ -898,13 +1710,15 @@ function renderHeader() {
   const title = job?.original_filename || state.jobId || t("result.title");
   resultTitleEl.textContent = title;
   setDocumentTitle(`${title} - ${t("appTitle")}`);
+  renderActionLabels();
 }
 
 function renderInfoPanel() {
   const hasJob = Boolean(state.job) && !state.missing;
-  resultInfoPanelEl.hidden = !hasJob || !state.infoOpen;
+  const infoVisible = hasJob && !state.toolbarCollapsed && state.infoOpen;
+  resultInfoPanelEl.hidden = !infoVisible;
   infoToggleBtn.disabled = !hasJob;
-  infoToggleBtn.classList.toggle("active", hasJob && state.infoOpen);
+  infoToggleBtn.classList.toggle("active", infoVisible);
 }
 
 function renderEditorSurface(doc) {
@@ -917,6 +1731,7 @@ function renderEditorSurface(doc) {
   `;
   applyReaderPrefs();
   bindEditorSurface();
+  applyReadableSyncToEditorSurface();
   if (state.findOpen) {
     refreshFindMatches();
   }
@@ -1047,7 +1862,27 @@ function closeFindBar() {
   renderEditorStatus();
 }
 
+function setToolbarCollapsed(collapsed) {
+  state.toolbarCollapsed = Boolean(collapsed);
+  window.localStorage.setItem(TOOLBAR_COLLAPSED_KEY, String(state.toolbarCollapsed));
+  if (state.toolbarCollapsed) {
+    state.viewOpen = false;
+    state.infoOpen = false;
+    if (state.findOpen) {
+      state.findOpen = false;
+      editorFindbarEl.hidden = true;
+      clearFindHighlights();
+    }
+  }
+  renderReaderControls();
+  renderInfoPanel();
+  renderEditorStatus();
+}
+
 function openFindBar() {
+  if (state.toolbarCollapsed) {
+    setToolbarCollapsed(false);
+  }
   if (state.findOpen) {
     closeFindBar();
     return;
@@ -1089,6 +1924,27 @@ function bindEditorSurface() {
     document.execCommand("insertText", false, text);
   });
 
+  surface.addEventListener("click", (event) => {
+    if (!event.ctrlKey && !event.metaKey) {
+      return;
+    }
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const block = target.closest("span.sync-sentence[data-sync-id]");
+    if (!block || !surface.contains(block)) {
+      return;
+    }
+    const item = state.sync.byId.get(block.dataset.syncId);
+    if (!item) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    seekPlayerToSyncItem(item);
+  });
+
   surface.addEventListener("keydown", (event) => {
     if (!event.ctrlKey && !event.metaKey) {
       return;
@@ -1096,12 +1952,12 @@ function bindEditorSurface() {
     const key = event.key.toLowerCase();
     if (key === "b") {
       event.preventDefault();
-      document.execCommand("bold");
+      runEditorCommand("bold");
       return;
     }
     if (key === "i") {
       event.preventDefault();
-      document.execCommand("italic");
+      runEditorCommand("italic");
       return;
     }
     if (key === "f") {
@@ -1278,6 +2134,7 @@ async function renderDocumentContent() {
 
   try {
     const doc = await loadDocumentVariant("readable");
+    await loadReadableSync();
     renderEditorSurface(doc);
   } catch (error) {
     renderContentPlaceholder(t("status.requestError", { message: String(error) }));
@@ -1291,6 +2148,7 @@ function renderJobState() {
   renderInfoPanel();
   renderReaderControls();
   renderEditorStatus();
+  ensurePlayerSource(job);
 
   removeBtn.disabled = !canRemove(job);
   if (isReadableAvailable(job)) {
@@ -1322,8 +2180,14 @@ async function syncJob() {
     state.missing = false;
     state.refreshError = "";
 
-    if (!currentJob || currentJob.status !== nextJob.status || currentJob.readable_available !== nextJob.readable_available) {
+    if (
+      !currentJob
+      || currentJob.status !== nextJob.status
+      || currentJob.readable_available !== nextJob.readable_available
+      || currentJob.readable_sync_available !== nextJob.readable_sync_available
+    ) {
       state.documents.readable.loaded = false;
+      resetReadableSync();
     }
 
     if (currentJob && currentJob.status !== nextJob.status && !TERMINAL_STATUSES.has(currentJob.status) && TERMINAL_STATUSES.has(nextJob.status)) {
@@ -1557,11 +2421,29 @@ function bindEvents() {
   readerJustifyHyphenBtn?.addEventListener("click", () => setReaderAlignMode("justify_hyphen"));
   readerParagraphGapInput?.addEventListener("change", () => setReaderParagraphGap(readerParagraphGapInput.checked));
 
+  downloadMenuBtn?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (downloadMenuBtn.disabled) {
+      return;
+    }
+    state.downloadMenuOpen = !state.downloadMenuOpen;
+    renderDownloadMenu();
+  });
   downloadLink?.addEventListener("click", () => {
+    state.downloadMenuOpen = false;
+    renderDownloadMenu();
     void handleDownload();
   });
   downloadPdfBtn?.addEventListener("click", () => {
+    state.downloadMenuOpen = false;
+    renderDownloadMenu();
     void handlePdfDownload();
+  });
+  playerToggleBtn?.addEventListener("click", () => {
+    setPlayerVisible(!state.playerVisible);
+  });
+  toolbarToggleBtn?.addEventListener("click", () => {
+    setToolbarCollapsed(!state.toolbarCollapsed);
   });
   removeBtn?.addEventListener("click", () => {
     void handleRemove();
@@ -1597,12 +2479,118 @@ function bindEvents() {
     }
   });
 
+  playerPlayBtn?.addEventListener("click", () => {
+    void togglePlayerPlayback();
+  });
+  playerRewindBtn?.addEventListener("click", () => {
+    resultAudioEl.currentTime = Math.max(0, resultAudioEl.currentTime - 5);
+    renderPlayerControls();
+    updateActiveSyncFromPlayback({ scroll: false });
+  });
+  playerForwardBtn?.addEventListener("click", () => {
+    const duration = getPlayerDuration();
+    resultAudioEl.currentTime = duration > 0
+      ? Math.min(duration, resultAudioEl.currentTime + 5)
+      : resultAudioEl.currentTime + 5;
+    renderPlayerControls();
+    updateActiveSyncFromPlayback({ scroll: false });
+  });
+  playerMuteBtn?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    state.player.volumeOpen = !state.player.volumeOpen;
+    state.player.rateOpen = false;
+    renderPlayerControls();
+  });
+  playerRateBtn?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    state.player.rateOpen = !state.player.rateOpen;
+    state.player.volumeOpen = false;
+    renderPlayerControls();
+  });
+  playerRateOptions.forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPlayerRate(button.dataset.rate);
+      state.player.rateOpen = false;
+      renderPlayerControls();
+    });
+  });
+  playerVolumeInput?.addEventListener("input", () => {
+    const volume = Math.max(0, Math.min(1, Number(playerVolumeInput.value) || 0));
+    resultAudioEl.volume = volume;
+    if (volume > 0) {
+      resultAudioEl.muted = false;
+    }
+    window.localStorage.setItem(PLAYER_VOLUME_KEY, String(volume));
+    window.localStorage.setItem(PLAYER_MUTED_KEY, String(resultAudioEl.muted));
+    renderPlayerControls();
+  });
+  resultAudioEl?.addEventListener("play", () => {
+    renderPlayerControls();
+    updateActiveSyncFromPlayback({ scroll: false });
+  });
+  resultAudioEl?.addEventListener("pause", () => renderPlayerControls());
+  resultAudioEl?.addEventListener("loadedmetadata", () => {
+    renderPlayerControls();
+    updateActiveSyncFromPlayback({ scroll: false });
+  });
+  resultAudioEl?.addEventListener("durationchange", () => renderPlayerControls());
+  resultAudioEl?.addEventListener("timeupdate", () => {
+    drawPlayerWaveform();
+    updateActiveSyncFromPlayback();
+  });
+  resultAudioEl?.addEventListener("volumechange", () => {
+    playerVolumeInput.value = String(resultAudioEl.volume);
+    renderPlayerControls();
+  });
+  resultAudioEl?.addEventListener("ratechange", () => renderPlayerControls());
+  resultAudioEl?.addEventListener("error", () => {
+    const error = resultAudioEl.error;
+    const message = error?.message || (error?.code ? `Media error ${error.code}` : "Unsupported source");
+    state.actionError = t("result.playerPlayError", { message });
+    renderJobBanner();
+    renderPlayerControls();
+  });
+  resultAudioEl?.addEventListener("ended", () => renderPlayerControls());
+  playerWaveformEl?.addEventListener("pointerdown", (event) => {
+    state.player.seeking = true;
+    playerWaveformEl.setPointerCapture?.(event.pointerId);
+    seekPlayerFromPointer(event);
+  });
+  playerWaveformEl?.addEventListener("pointermove", (event) => {
+    if (state.player.seeking) {
+      seekPlayerFromPointer(event);
+    }
+  });
+  playerWaveformEl?.addEventListener("pointerup", (event) => {
+    state.player.seeking = false;
+    playerWaveformEl.releasePointerCapture?.(event.pointerId);
+  });
+  playerWaveformEl?.addEventListener("pointercancel", () => {
+    state.player.seeking = false;
+  });
+  resultContentEl?.addEventListener("wheel", () => suppressSyncAutoscroll(), { passive: true });
+  resultContentEl?.addEventListener("touchstart", () => suppressSyncAutoscroll(), { passive: true });
+  resultContentEl?.addEventListener("pointerdown", () => suppressSyncAutoscroll(1800));
+
   FORMATTING_BUTTONS.forEach(bindToolbarMouseDown);
 
   document.addEventListener("mousedown", (event) => {
     const target = event.target;
     if (!(target instanceof Node)) {
       return;
+    }
+    if (state.downloadMenuOpen && downloadMenuAnchorEl && !downloadMenuAnchorEl.contains(target)) {
+      state.downloadMenuOpen = false;
+      renderDownloadMenu();
+    }
+    if (state.player.volumeOpen && playerVolumeAnchorEl && !playerVolumeAnchorEl.contains(target)) {
+      state.player.volumeOpen = false;
+      renderPlayerControls();
+    }
+    if (state.player.rateOpen && playerRateAnchorEl && !playerRateAnchorEl.contains(target)) {
+      state.player.rateOpen = false;
+      renderPlayerControls();
     }
     if (state.viewOpen && viewPopoverAnchorEl && !viewPopoverAnchorEl.contains(target)) {
       state.viewOpen = false;
@@ -1626,7 +2614,22 @@ function bindEvents() {
   });
 
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Control" || event.key === "Meta") {
+      setSyncSeekModifier(true);
+    }
     if (event.key === "Escape") {
+      if (state.downloadMenuOpen) {
+        state.downloadMenuOpen = false;
+        renderDownloadMenu();
+      }
+      if (state.player.volumeOpen) {
+        state.player.volumeOpen = false;
+        renderPlayerControls();
+      }
+      if (state.player.rateOpen) {
+        state.player.rateOpen = false;
+        renderPlayerControls();
+      }
       if (state.findOpen) {
         closeFindBar();
       }
@@ -1644,6 +2647,13 @@ function bindEvents() {
       void saveCurrentDocument();
     }
   });
+  window.addEventListener("keyup", (event) => {
+    if (event.key === "Control" || event.key === "Meta") {
+      setSyncSeekModifier(false);
+    }
+  });
+  window.addEventListener("blur", () => setSyncSeekModifier(false));
+  window.addEventListener("resize", () => drawPlayerWaveform());
 }
 
 async function boot() {

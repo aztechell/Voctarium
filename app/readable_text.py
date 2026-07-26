@@ -96,6 +96,26 @@ class SentenceChunk:
     text: str
 
 
+@dataclass(slots=True)
+class ParagraphChunk:
+    start: float
+    end: float
+    text: str
+    sentences: list[SentenceChunk]
+
+
+@dataclass(slots=True)
+class ReadableDocument:
+    paragraphs: list[ParagraphChunk]
+
+
+@dataclass(slots=True)
+class WordTiming:
+    text: str
+    start: float
+    end: float
+
+
 class RUPunctPunctuator:
     def __init__(self, model_path: Path, device: str = "cpu") -> None:
         self._model_path = Path(model_path)
@@ -179,6 +199,22 @@ class ReadableTextProcessor:
         punctuator = self._get_punctuator()
         return build_readable_paragraphs(engine, segments, punctuator=punctuator)
 
+    def build_paragraph_chunks(
+        self,
+        engine: EngineType,
+        segments: Iterable[TranscriptSegment],
+    ) -> list[ParagraphChunk]:
+        punctuator = self._get_punctuator()
+        return build_readable_paragraph_chunks(engine, segments, punctuator=punctuator)
+
+    def build_document(
+        self,
+        engine: EngineType,
+        segments: Iterable[TranscriptSegment],
+    ) -> ReadableDocument:
+        punctuator = self._get_punctuator()
+        return build_readable_document(engine, segments, punctuator=punctuator)
+
     def _get_punctuator(self) -> Punctuator | None:
         if self._punctuator_override is not None:
             return self._punctuator_override
@@ -200,13 +236,31 @@ def build_readable_paragraphs(
     segments: Iterable[TranscriptSegment],
     punctuator: Punctuator | None = None,
 ) -> list[str]:
+    return [chunk.text for chunk in build_readable_paragraph_chunks(engine, segments, punctuator=punctuator)]
+
+
+def build_readable_document(
+    engine: EngineType,
+    segments: Iterable[TranscriptSegment],
+    punctuator: Punctuator | None = None,
+) -> ReadableDocument:
+    return ReadableDocument(
+        paragraphs=build_readable_paragraph_chunks(engine, segments, punctuator=punctuator),
+    )
+
+
+def build_readable_paragraph_chunks(
+    engine: EngineType,
+    segments: Iterable[TranscriptSegment],
+    punctuator: Punctuator | None = None,
+) -> list[ParagraphChunk]:
     prepared = _prepare_segments(segments)
     if not prepared:
         return []
 
     if punctuator is None:
         sentences = _build_heuristic_sentences(engine, prepared)
-        return _group_paragraphs(sentences)
+        return _group_paragraph_chunks(sentences)
 
     windows = _chunk_segments(prepared)
     sentences: list[SentenceChunk] = []
@@ -219,7 +273,7 @@ def build_readable_paragraphs(
         except Exception:
             sentences.extend(_build_heuristic_sentences(engine, window.segments, gap_before=window.gap_before))
 
-    return _group_paragraphs(sentences)
+    return _group_paragraph_chunks(sentences)
 
 
 def _prepare_segments(segments: Iterable[TranscriptSegment]) -> list[TranscriptSegment]:
@@ -290,19 +344,112 @@ def _build_sentences_from_punctuated_window(
         sentence_texts = [normalized]
 
     sentences: list[SentenceChunk] = []
+    word_timeline = _build_word_timeline(window.segments)
+    timeline_cursor = 0
     for index, sentence_text in enumerate(sentence_texts):
         cleaned = _finalize_sentence_text(sentence_text)
         if not cleaned:
             continue
+        timing, timeline_cursor = _align_sentence_timing(cleaned, word_timeline, timeline_cursor)
+        start, end = timing if timing is not None else (window.start, window.end)
         sentences.append(
             SentenceChunk(
-                start=window.start,
-                end=window.end,
+                start=start,
+                end=end,
                 gap_before=window.gap_before if index == 0 else 0.0,
                 text=cleaned,
             )
         )
     return sentences
+
+
+def _build_word_timeline(segments: list[TranscriptSegment]) -> list[WordTiming]:
+    timeline: list[WordTiming] = []
+    for segment in segments:
+        words = WORD_RE.findall(segment.text)
+        if not words:
+            continue
+        duration = max(0.01, segment.end - segment.start)
+        for index, word in enumerate(words):
+            word_start = segment.start + duration * index / len(words)
+            word_end = segment.start + duration * (index + 1) / len(words)
+            timeline.append(
+                WordTiming(
+                    text=_normalize_alignment_word(word),
+                    start=word_start,
+                    end=max(word_start, word_end),
+                )
+            )
+    return timeline
+
+
+def _align_sentence_timing(
+    sentence_text: str,
+    timeline: list[WordTiming],
+    cursor: int,
+) -> tuple[tuple[float, float] | None, int]:
+    sentence_words = [
+        _normalize_alignment_word(word)
+        for word in WORD_RE.findall(sentence_text)
+        if _normalize_alignment_word(word)
+    ]
+    if not sentence_words or not timeline:
+        return None, cursor
+
+    start_index, end_index = _match_sentence_words_to_timeline(sentence_words, timeline, cursor)
+    if start_index is None or end_index is None:
+        fallback_start = min(max(cursor, 0), len(timeline) - 1)
+        fallback_end = min(len(timeline) - 1, fallback_start + max(1, len(sentence_words)) - 1)
+        start_index, end_index = fallback_start, fallback_end
+
+    start = timeline[start_index].start
+    end = max(start, timeline[end_index].end)
+    return (start, end), min(len(timeline), end_index + 1)
+
+
+def _match_sentence_words_to_timeline(
+    sentence_words: list[str],
+    timeline: list[WordTiming],
+    cursor: int,
+) -> tuple[int | None, int | None]:
+    if cursor >= len(timeline):
+        return None, None
+
+    best: tuple[int, int, int] | None = None
+    search_end = min(len(timeline), cursor + max(18, len(sentence_words) * 3))
+    for candidate_start in range(cursor, search_end):
+        source_index = candidate_start
+        first_match: int | None = None
+        last_match: int | None = None
+        matched = 0
+        for word in sentence_words:
+            found: int | None = None
+            scan_end = min(len(timeline), source_index + 10)
+            for scan_index in range(source_index, scan_end):
+                if timeline[scan_index].text == word:
+                    found = scan_index
+                    break
+            if found is None:
+                continue
+            first_match = found if first_match is None else first_match
+            last_match = found
+            matched += 1
+            source_index = found + 1
+
+        if first_match is None or last_match is None:
+            continue
+        candidate = (matched, first_match, last_match)
+        if best is None or candidate[0] > best[0] or (
+            candidate[0] == best[0] and candidate[1] < best[1]
+        ):
+            best = candidate
+        if matched == len(sentence_words):
+            break
+
+    min_matches = max(1, min(len(sentence_words), max(2, int(len(sentence_words) * 0.45))))
+    if best is None or best[0] < min_matches:
+        return None, None
+    return best[1], best[2]
 
 
 def _build_heuristic_sentences(
@@ -424,8 +571,26 @@ def _should_force_sentence_break(current_text: str, gap: float, next_text: str) 
 
 
 def _group_paragraphs(sentences: list[SentenceChunk]) -> list[str]:
-    paragraphs: list[str] = []
-    current: list[str] = []
+    return [chunk.text for chunk in _group_paragraph_chunks(sentences)]
+
+
+def _group_paragraph_chunks(sentences: list[SentenceChunk]) -> list[ParagraphChunk]:
+    chunks: list[ParagraphChunk] = []
+    current: list[SentenceChunk] = []
+
+    def flush_current() -> None:
+        if not current:
+            return
+        text = " ".join(sentence.text for sentence in current).strip()
+        if text:
+            chunks.append(
+                ParagraphChunk(
+                    start=current[0].start,
+                    end=current[-1].end,
+                    text=text,
+                    sentences=list(current),
+                )
+            )
 
     for sentence in sentences:
         if current and (
@@ -433,15 +598,15 @@ def _group_paragraphs(sentences: list[SentenceChunk]) -> list[str]:
             or len(current) >= 5
             or (_starts_new_topic(sentence.text) and len(current) >= 2)
         ):
-            paragraphs.append(" ".join(current).strip())
+            flush_current()
             current = []
 
-        current.append(sentence.text)
+        current.append(sentence)
 
     if current:
-        paragraphs.append(" ".join(current).strip())
+        flush_current()
 
-    return [paragraph for paragraph in paragraphs if paragraph]
+    return chunks
 
 
 def _finalize_sentence(start: float, end: float, gap_before: float, text: str) -> SentenceChunk:
@@ -466,6 +631,10 @@ def _normalize_segment_text(text: str) -> str:
     normalized = re.sub(r"([,.;:!?…])\1+", r"\1", normalized)
     normalized = REPEATED_WORD_RE.sub(r"\1", normalized)
     return normalized.strip()
+
+
+def _normalize_alignment_word(word: str) -> str:
+    return word.strip().lower().replace("ё", "е")
 
 
 def _normalize_punctuated_text(text: str) -> str:

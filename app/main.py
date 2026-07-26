@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import mimetypes
 from pathlib import Path
 import re
 import uuid
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -20,6 +21,7 @@ from app.types import JobStatus
 
 
 FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+RANGE_PATTERN = re.compile(r"bytes=(\d*)-(\d*)$")
 
 
 class RetryRequest(BaseModel):
@@ -48,6 +50,79 @@ def sanitize_filename(filename: str) -> str:
     return cleaned or "audio"
 
 
+def iter_file_range(path: Path, start: int, length: int):
+    with path.open("rb") as handle:
+        handle.seek(start)
+        remaining = length
+        while remaining > 0:
+            chunk = handle.read(min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+def source_file_response(path: Path, media_type: str, range_header: str | None) -> Response:
+    try:
+        file_size = path.stat().st_size
+    except OSError as exc:
+        raise FileNotFoundError("Source file is unavailable.") from exc
+
+    headers = {"Accept-Ranges": "bytes"}
+    if not range_header:
+        return FileResponse(path=path, media_type=media_type, headers=headers)
+
+    match = RANGE_PATTERN.fullmatch(range_header.strip())
+    if not match or file_size <= 0:
+        raise HTTPException(
+            status_code=416,
+            detail="Invalid byte range.",
+            headers={"Content-Range": f"bytes */{file_size}", **headers},
+        )
+
+    start_raw, end_raw = match.groups()
+    if start_raw == "" and end_raw == "":
+        raise HTTPException(
+            status_code=416,
+            detail="Invalid byte range.",
+            headers={"Content-Range": f"bytes */{file_size}", **headers},
+        )
+
+    if start_raw == "":
+        suffix_length = int(end_raw)
+        if suffix_length <= 0:
+            raise HTTPException(
+                status_code=416,
+                detail="Invalid byte range.",
+                headers={"Content-Range": f"bytes */{file_size}", **headers},
+            )
+        start = max(file_size - suffix_length, 0)
+        end = file_size - 1
+    else:
+        start = int(start_raw)
+        end = int(end_raw) if end_raw else file_size - 1
+
+    if start >= file_size or end < start:
+        raise HTTPException(
+            status_code=416,
+            detail="Invalid byte range.",
+            headers={"Content-Range": f"bytes */{file_size}", **headers},
+        )
+
+    end = min(end, file_size - 1)
+    length = end - start + 1
+    return StreamingResponse(
+        iter_file_range(path, start, length),
+        status_code=206,
+        media_type=media_type,
+        headers={
+            **headers,
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(length),
+        },
+    )
+
+
 async def save_upload_to_path(upload: UploadFile, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("wb") as out:
@@ -72,7 +147,7 @@ def create_app(settings: Settings | None = None, job_manager: JobManager | None 
         finally:
             await manager.shutdown()
 
-    app = FastAPI(title="Voctarium STT", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Voctarium STT", version="0.3.0", lifespan=lifespan)
     templates = Jinja2Templates(directory=str(resolved_settings.resource_root / "app" / "templates"))
     app.mount(
         "/static",
@@ -288,6 +363,61 @@ def create_app(settings: Settings | None = None, job_manager: JobManager | None 
     async def reset_document(job_id: str) -> dict:
         try:
             return app.state.job_manager.reset_document_override(job_id, "readable")
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/jobs/{job_id}/sync/readable")
+    async def get_readable_sync(job_id: str) -> dict:
+        try:
+            return app.state.job_manager.get_readable_sync_payload(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/jobs/{job_id}/source")
+    async def get_job_source(job_id: str, request: Request) -> Response:
+        try:
+            payload, path = app.state.job_manager.get_source_file_path(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        media_type = mimetypes.guess_type(payload.get("original_filename") or str(path))[0]
+        try:
+            return source_file_response(
+                path,
+                media_type or "application/octet-stream",
+                request.headers.get("range"),
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/jobs/{job_id}/source-audio")
+    async def get_job_source_audio(job_id: str, request: Request) -> Response:
+        try:
+            path = app.state.job_manager.get_player_audio_path(job_id)
+            return source_file_response(path, "audio/wav", request.headers.get("range"))
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/jobs/{job_id}/waveform")
+    async def get_job_waveform(job_id: str, points: int = Query(default=900, ge=64, le=2000)) -> dict:
+        try:
+            return app.state.job_manager.get_waveform_payload(job_id, points=points)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except JobStateError as exc:

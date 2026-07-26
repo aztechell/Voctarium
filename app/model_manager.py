@@ -23,7 +23,7 @@ MODEL_CATALOG: tuple[dict[str, str], ...] = (
 )
 MODEL_IDS = {item["id"] for item in MODEL_CATALOG}
 DEFAULT_DESKTOP_SETTINGS: dict[str, bool] = {
-    "cleanup_uploads_on_close": True,
+    "cleanup_uploads_on_close": False,
     "cleanup_queue_on_close": False,
 }
 

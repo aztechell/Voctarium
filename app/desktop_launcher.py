@@ -25,7 +25,7 @@ DEFAULT_PORT = 8000
 WINDOW_BACKGROUND = "#12161d"
 SESSION_STORAGE_SUBDIRS = ("uploads", "work", "results")
 DEFAULT_DESKTOP_SETTINGS = {
-    "cleanup_uploads_on_close": True,
+    "cleanup_uploads_on_close": False,
     "cleanup_queue_on_close": False,
 }
 

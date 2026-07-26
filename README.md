@@ -1,5 +1,10 @@
 # Voctarium STT
 
+[![Release](https://img.shields.io/github/v/release/aztechell/Voctarium)](https://github.com/aztechell/Voctarium/releases/latest)
+[![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows11&logoColor=white)](https://github.com/aztechell/Voctarium)
+[![License: MIT](https://img.shields.io/github/license/aztechell/Voctarium)](LICENSE)
+
 Локальное Windows-приложение для расшифровки аудио и видео на базе `faster-whisper` с очередью задач, менеджером моделей, встроенным редактором читабельного текста и desktop-режимом через `pywebview`.
 
 ## Текущее состояние продукта
@@ -11,6 +16,7 @@
 - desktop-режим в одном native WebView-окне
 - один пользовательский результат на задачу: `readable`
 - встроенный редактор читабельного текста с автосохранением
+- встроенный аудиоплеер с waveform, навигацией по таймкоду и синхронной подсветкой предложений
 - экспорт в `.md` и `.pdf`
 - глобальные desktop-настройки очистки runtime-данных между сессиями
 - переключение языка интерфейса `RU/EN` и светлой/темной темы на dashboard
@@ -167,6 +173,9 @@ Dashboard работает только с локально установлен
 
 Страница результата сейчас работает как readable-only редактор:
 
+- воспроизведение исходного аудио или извлеченной аудиодорожки видео
+- waveform с перемоткой и синхронной подсветкой текущего предложения
+- переход к нужному фрагменту аудио по клику на текст
 - редактирование прямо в интерфейсе
 - `Жирный`, `Курсив`, `H2`, `H3`, списки
 - `Undo / Redo`
@@ -244,6 +253,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\e2e_check.ps1 -InputPath ".\t
 - `POST /api/jobs` - создать задачу (`file`, optional `model_id`, `include_timestamps`)
 - `GET /api/jobs?limit=...` - список задач
 - `GET /api/jobs/{job_id}` - payload задачи
+- `GET /api/jobs/{job_id}/source` - исходный медиафайл с поддержкой HTTP Range
+- `GET /api/jobs/{job_id}/source-audio` - аудиодорожка для встроенного плеера
+- `GET /api/jobs/{job_id}/waveform` - нормализованные пики waveform
+- `GET /api/jobs/{job_id}/sync/readable` - таймкоды предложений для синхронизации текста
 - `POST /api/jobs/{job_id}/retry` - повторный запуск из сохраненного исходника
 - `POST /api/jobs/{job_id}/cancel` - остановить активную задачу
 - `DELETE /api/jobs/{job_id}` - удалить задачу и ее файлы

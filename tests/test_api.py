@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import time
 
 from fastapi.testclient import TestClient
@@ -62,6 +63,15 @@ def test_dashboard_and_result_routes(test_settings, tmp_path) -> None:
         assert 'id="reader-justify-full-btn"' in result_response.text
         assert 'id="reader-justify-hyphen-btn"' in result_response.text
         assert 'id="editor-findbar"' in result_response.text
+        assert 'id="download-menu-btn"' in result_response.text
+        assert 'id="download-menu"' in result_response.text
+        assert 'id="player-toggle-btn"' in result_response.text
+        assert 'id="result-player"' in result_response.text
+        assert 'id="player-waveform"' in result_response.text
+        assert 'id="player-rate-btn"' in result_response.text
+        assert 'id="player-rate-popover"' in result_response.text
+        assert 'id="player-title"' not in result_response.text
+        assert 'class="player-track-meta"' not in result_response.text
         assert 'id="back-link"' in result_response.text
         assert 'id="settings-modal"' not in result_response.text
         assert 'id="settings-btn"' not in result_response.text
@@ -105,10 +115,62 @@ def test_api_job_lifecycle_and_preview(test_settings, tmp_path) -> None:
         assert final_payload["progress_percent"] == 100
         assert final_payload["source_available"] is True
         assert final_payload["readable_available"] is True
+        assert final_payload["readable_sync_available"] is True
         assert "is_expired" not in final_payload
         assert "expires_at" not in final_payload
         assert final_payload["original_filename"] == "input.wav"
         assert final_payload["model_id"] == "medium"
+
+        sync_response = client.get(f"/api/jobs/{job_id}/sync/readable")
+        assert sync_response.status_code == 200
+        sync_payload = sync_response.json()
+        assert sync_payload["version"] == 2
+        assert sync_payload["granularity"] == "sentence"
+        assert sync_payload["job_id"] == job_id
+        assert sync_payload["variant"] == "readable"
+        assert sync_payload["paragraphs"]
+        assert sync_payload["paragraphs"][0]["id"] == "p0"
+        assert sync_payload["items"]
+        assert sync_payload["items"][0]["id"] == "s0"
+        assert sync_payload["items"][0]["paragraph_id"] == "p0"
+        assert sync_payload["items"][0]["paragraph_index"] == 0
+        assert sync_payload["items"][0]["sentence_index"] == 0
+        assert sync_payload["items"][0]["start"] == 0.0
+        assert sync_payload["items"][0]["end"] >= sync_payload["items"][0]["start"]
+        assert sync_payload["items"][0]["text"]
+
+        source_response = client.get(f"/api/jobs/{job_id}/source")
+        assert source_response.status_code == 200
+        assert "audio" in source_response.headers["content-type"]
+        assert source_response.headers["accept-ranges"] == "bytes"
+        assert source_response.content.startswith(b"RIFF")
+
+        source_range_response = client.get(f"/api/jobs/{job_id}/source", headers={"Range": "bytes=0-3"})
+        assert source_range_response.status_code == 206
+        assert source_range_response.headers["accept-ranges"] == "bytes"
+        assert source_range_response.headers["content-range"].startswith("bytes 0-3/")
+        assert source_range_response.content == b"RIFF"
+
+        source_audio_response = client.get(f"/api/jobs/{job_id}/source-audio")
+        assert source_audio_response.status_code == 200
+        assert "audio/wav" in source_audio_response.headers["content-type"]
+        assert source_audio_response.headers["accept-ranges"] == "bytes"
+        assert source_audio_response.content.startswith(b"RIFF")
+
+        source_audio_range_response = client.get(
+            f"/api/jobs/{job_id}/source-audio",
+            headers={"Range": "bytes=0-3"},
+        )
+        assert source_audio_range_response.status_code == 206
+        assert source_audio_range_response.content == b"RIFF"
+
+        waveform_response = client.get(f"/api/jobs/{job_id}/waveform?points=96")
+        assert waveform_response.status_code == 200
+        waveform_payload = waveform_response.json()
+        assert waveform_payload["points"] == 96
+        assert len(waveform_payload["peaks"]) == 96
+        assert all(0 <= value <= 1 for value in waveform_payload["peaks"])
+        assert waveform_payload["duration_seconds"] == 5.0
 
         list_response = client.get("/api/jobs?limit=10")
         assert list_response.status_code == 200
@@ -132,6 +194,59 @@ def test_api_job_lifecycle_and_preview(test_settings, tmp_path) -> None:
         readable_preview_response = client.get(f"/api/jobs/{job_id}/readable.preview")
         assert readable_preview_response.status_code == 200
         assert '<article class="md-preview">' in readable_preview_response.text
+
+
+def test_source_and_waveform_return_404_when_source_is_missing(test_settings, tmp_path) -> None:
+    manager = JobManager(
+        test_settings,
+        ffmpeg_service=FakeFfmpegService(),
+        asr_factory=FakeASRFactory(),
+    )
+    app = create_app(settings=test_settings, job_manager=manager)
+
+    input_file = tmp_path / "missing-source.wav"
+    make_test_wav(input_file)
+
+    with TestClient(app) as client:
+        with input_file.open("rb") as handle:
+            create_response = client.post(
+                "/api/jobs",
+                files={"file": ("missing-source.wav", handle, "audio/wav")},
+                data={"include_timestamps": "false"},
+            )
+        job_id = create_response.json()["job_id"]
+        wait_until_final(client, job_id)
+        stored = manager.get_job(job_id)
+        assert stored is not None
+
+        sync_path = test_settings.results_dir / f"{job_id}.sync.json"
+        sync_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "job_id": job_id,
+                    "variant": "readable",
+                    "items": [{"id": "p0", "start": 0.0, "end": 1.0, "text": "legacy"}],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        payload_without_sync = client.get(f"/api/jobs/{job_id}").json()
+        assert payload_without_sync["readable_sync_available"] is False
+        sync_response = client.get(f"/api/jobs/{job_id}/sync/readable")
+        assert sync_response.status_code == 404
+
+        stored.input_path.unlink()
+
+        source_response = client.get(f"/api/jobs/{job_id}/source")
+        assert source_response.status_code == 404
+
+        source_audio_response = client.get(f"/api/jobs/{job_id}/source-audio")
+        assert source_audio_response.status_code == 404
+
+        waveform_response = client.get(f"/api/jobs/{job_id}/waveform")
+        assert waveform_response.status_code == 404
 
 
 def test_document_endpoints_override_preview_and_exports(test_settings, tmp_path, monkeypatch) -> None:
@@ -252,6 +367,8 @@ def test_api_retry_and_delete(test_settings, tmp_path) -> None:
         assert retried_final["engine"] == "faster_whisper"
         assert retried_final["model_id"] == "medium"
         assert retried_final["include_timestamps"] is True
+        retried_sync_path = test_settings.results_dir / f"{retried_id}.sync.json"
+        assert retried_sync_path.exists()
 
         delete_response = client.delete(f"/api/jobs/{retried_id}")
         assert delete_response.status_code == 200
@@ -259,6 +376,7 @@ def test_api_retry_and_delete(test_settings, tmp_path) -> None:
 
         after_delete = client.get(f"/api/jobs/{retried_id}")
         assert after_delete.status_code == 404
+        assert not retried_sync_path.exists()
 
 
 def test_old_job_keeps_results_and_retry(test_settings, tmp_path) -> None:
@@ -435,6 +553,9 @@ def test_document_update_rejected_for_processing_job(test_settings, tmp_path) ->
         )
         assert update_response.status_code == 409
 
+        sync_response = client.get(f"/api/jobs/{job_id}/sync/readable")
+        assert sync_response.status_code == 409
+
 
 def test_desktop_settings_api(test_settings) -> None:
     manager = JobManager(
@@ -448,7 +569,7 @@ def test_desktop_settings_api(test_settings) -> None:
         initial_response = client.get("/api/settings/desktop")
         assert initial_response.status_code == 200
         assert initial_response.json() == {
-            "cleanup_uploads_on_close": True,
+            "cleanup_uploads_on_close": False,
             "cleanup_queue_on_close": False,
         }
 
