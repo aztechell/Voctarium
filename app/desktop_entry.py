@@ -4,6 +4,10 @@ import argparse
 
 
 def run_server(host: str, port: int) -> int:
+    from app.runtime_bootstrap import ensure_ml_runtime
+
+    ensure_ml_runtime()
+
     import uvicorn
 
     from app.main import app

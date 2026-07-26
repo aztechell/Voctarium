@@ -130,12 +130,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_desktop_exe.ps1
 Результат сборки:
 
 - `dist\Voctarium\Voctarium.exe`
+- `dist\Voctarium-v0.3.0-ml-runtime.zip`
 
-В build-каталог копируются runtime-ассеты:
+В основной build-каталог копируется только `dist\Voctarium\bin\ffmpeg.exe`.
+Тяжелые зависимости `Torch`, `Transformers` и NVIDIA CUDA DLL выносятся в
+отдельный ML runtime-архив. При первом запуске release-сборка автоматически
+скачивает и распаковывает его рядом с приложением.
 
-- `dist\Voctarium\bin\ffmpeg.exe`
-- `dist\Voctarium\models\faster-whisper-medium\...`
-- `dist\Voctarium\models\rupunct-big\...`
+Модели `faster-whisper` в release-архив не входят: нужная модель устанавливается
+вручную через менеджер моделей в Dashboard.
 
 ## Менеджер моделей `faster-whisper`
 

@@ -32,6 +32,8 @@ DEFAULT_DESKTOP_SETTINGS = {
 _DESKTOP_STRINGS = {
     "ru": {
         "launching": "Запуск Voctarium...",
+        "installing_runtime": "Установка компонентов распознавания...",
+        "runtime_progress": "Загрузка компонентов: {percent}%",
         "preparing": "Подготовка сервера...",
         "opening": "Открытие окна...",
         "quit_confirmation": "Закрыть Voctarium? Текущая desktop-сессия завершится, а загруженные файлы будут очищены.",
@@ -40,6 +42,8 @@ _DESKTOP_STRINGS = {
     },
     "en": {
         "launching": "Starting Voctarium...",
+        "installing_runtime": "Installing speech recognition components...",
+        "runtime_progress": "Downloading components: {percent}%",
         "preparing": "Preparing local server...",
         "opening": "Opening desktop window...",
         "quit_confirmation": "Close Voctarium? The current desktop session will end and uploaded files will be cleaned.",
@@ -786,6 +790,20 @@ def run_desktop(
     write_startup_trace(
         f"runtime_env prepared; runtime_root={os.getenv('VOCTARIUM_RUNTIME_ROOT', '')}"
     )
+
+    if getattr(sys, "frozen", False):
+        from app.runtime_bootstrap import ensure_ml_runtime
+
+        _set_splash_message(splash, _desktop_string(language, "installing_runtime"))
+
+        def update_runtime_progress(downloaded: int, total: int | None) -> None:
+            if not total:
+                return
+            percent = max(0, min(100, int(downloaded * 100 / total)))
+            template = _desktop_string(language, "runtime_progress")
+            _set_splash_message(splash, template.format(percent=percent))
+
+        ensure_ml_runtime(progress_callback=update_runtime_progress)
 
     cleaned_start = purge_session_storage(runtime_root)
     if cleaned_start:

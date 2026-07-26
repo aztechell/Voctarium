@@ -1,7 +1,8 @@
 param(
     [string]$ProjectRoot = (Join-Path $PSScriptRoot ".."),
     [string]$PythonVersion = "3.11",
-    [string]$ExeName = "Voctarium"
+    [string]$ExeName = "Voctarium",
+    [string]$ReleaseVersion = "0.3.0"
 )
 
 Set-StrictMode -Version Latest
@@ -189,24 +190,68 @@ try {
         $copiedAssets += "bin\\ffmpeg.exe"
     }
 
-    $fasterWhisperModelSource = Join-Path $resolvedProjectRoot "models\faster-whisper-medium"
-    Ensure-FasterWhisperModel -ModelDir $fasterWhisperModelSource -PythonExe $venvPython
-    if (Copy-DirectoryIfExists -SourcePath $fasterWhisperModelSource -DestinationPath (Join-Path $distDir "models\faster-whisper-medium")) {
-        $copiedAssets += "models\\faster-whisper-medium"
-    }
-
-    $rupunctModelSource = Join-Path $resolvedProjectRoot "models\rupunct-big"
-    Ensure-HuggingFaceSnapshot -RepoId "RUPunct/RUPunct_big" -ModelDir $rupunctModelSource -PythonExe $venvPython
-    if (Copy-DirectoryIfExists -SourcePath $rupunctModelSource -DestinationPath (Join-Path $distDir "models\rupunct-big")) {
-        $copiedAssets += "models\\rupunct-big"
-    }
-
     if ($copiedAssets.Count -gt 0) {
         Write-Host "Runtime assets copied to dist:"
         $copiedAssets | ForEach-Object { Write-Host " - $_" }
     } else {
-        Write-Warning "No runtime assets copied to dist. Add bin/models under project root and rebuild."
+        Write-Warning "ffmpeg.exe was not copied. Add bin/ffmpeg.exe and rebuild."
     }
+
+    Write-Host "Separating Torch, Transformers and CUDA into first-run ML runtime pack..."
+    $internalDir = Join-Path $distDir "_internal"
+    $runtimeStageDir = Join-Path $resolvedProjectRoot "dist\ml-runtime-stage"
+    $runtimePackPath = Join-Path $resolvedProjectRoot (
+        "dist\" + $ExeName + "-v" + $ReleaseVersion + "-ml-runtime.zip"
+    )
+    Remove-DirectorySafely -TargetPath $runtimeStageDir -RootPath $resolvedProjectRoot
+    Ensure-Directory -PathValue $runtimeStageDir
+
+    $runtimePatterns = @(
+        "torch",
+        "torch-*.dist-info",
+        "torchgen",
+        "functorch",
+        "nvidia",
+        "transformers",
+        "transformers-*.dist-info"
+    )
+    $movedRuntimeItems = @()
+    foreach ($pattern in $runtimePatterns) {
+        Get-ChildItem -LiteralPath $internalDir -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like $pattern } |
+            ForEach-Object {
+                $destination = Join-Path $runtimeStageDir $_.Name
+                if (Test-Path -LiteralPath $destination) {
+                    Remove-Item -LiteralPath $destination -Recurse -Force
+                }
+                Move-Item -LiteralPath $_.FullName -Destination $destination
+                $movedRuntimeItems += $_.Name
+            }
+    }
+    if ($movedRuntimeItems.Count -eq 0) {
+        throw "No ML runtime files were found to separate."
+    }
+
+    if (Test-Path -LiteralPath $runtimePackPath) {
+        Remove-Item -LiteralPath $runtimePackPath -Force
+    }
+    $runtimeItemNames = Get-ChildItem -LiteralPath $runtimeStageDir -Force |
+        Select-Object -ExpandProperty Name
+    Push-Location $runtimeStageDir
+    try {
+        Invoke-Checked -FilePath "tar.exe" -Arguments (
+            @("-a", "-c", "-f", $runtimePackPath) + $runtimeItemNames
+        )
+    }
+    finally {
+        Pop-Location
+    }
+    Remove-DirectorySafely -TargetPath $runtimeStageDir -RootPath $resolvedProjectRoot
+    Write-Host "First-run ML runtime pack created:"
+    Write-Host $runtimePackPath
+
+    Write-Host "Whisper and RUPunct models are not bundled."
+    Write-Host "Faster-whisper models can be downloaded manually from the app UI."
 
     $intermediateExePath = Join-Path $resolvedProjectRoot ("build\" + $ExeName + "\" + $ExeName + ".exe")
     if (Test-Path -LiteralPath $intermediateExePath) {
