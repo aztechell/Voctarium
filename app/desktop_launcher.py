@@ -64,6 +64,28 @@ class DesktopLaunchError(Exception):
     """Raised when desktop launcher cannot start or run."""
 
 
+def _unblock_frozen_runtime_binaries() -> int:
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return 0
+
+    internal_dir = getattr(sys, "_MEIPASS", None)
+    if not internal_dir:
+        return 0
+
+    removed = 0
+    root = Path(internal_dir)
+    for pattern in ("*.dll", "*.pyd", "*.exe"):
+        for binary_path in root.rglob(pattern):
+            try:
+                os.remove(f"{binary_path}:Zone.Identifier")
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
+            removed += 1
+    return removed
+
+
 class DesktopSaveBridge:
     def __init__(self, *, base_url: str) -> None:
         self._base_url = base_url.rstrip("/")
@@ -390,12 +412,14 @@ class StartupSplash:
             "height": self.height,
             "closed": closed,
         }
-        temporary_path = self._status_path.with_suffix(".tmp")
-        temporary_path.write_text(
-            json.dumps(payload, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        os.replace(temporary_path, self._status_path)
+        try:
+            self._status_path.write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            # Splash rendering must never interrupt runtime installation.
+            pass
 
     def update_message(self, message: str) -> None:
         self._message = message
@@ -468,7 +492,6 @@ class StartupSplash:
 
         if self._status_path is not None:
             self._status_path.unlink(missing_ok=True)
-            self._status_path.with_suffix(".tmp").unlink(missing_ok=True)
 
 
 def create_startup_splash() -> StartupSplash:
@@ -896,6 +919,10 @@ def run_desktop(
     write_startup_trace("run_desktop: begin")
 
     if getattr(sys, "frozen", False):
+        unblocked_count = _unblock_frozen_runtime_binaries()
+        write_startup_trace(
+            f"removed internet-zone marker from {unblocked_count} runtime binaries"
+        )
         write_startup_trace("preloading WebView2/pythonnet runtime")
         try:
             import webview.platforms.winforms  # noqa: F401

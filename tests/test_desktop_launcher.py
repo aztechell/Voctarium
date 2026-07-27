@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import socket
 import sys
 import types
@@ -129,6 +131,25 @@ def test_startup_splash_fallback_without_tkinter(monkeypatch) -> None:
     monkeypatch.setattr(splash, "_load_tkinter", _raise_missing)
     assert splash.start() is False
     splash.close()  # Should be safe no-op.
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NTFS alternate data stream is Windows-only")
+def test_unblock_frozen_runtime_binaries_removes_zone_identifier(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    internal = tmp_path / "_internal"
+    runtime_dll = internal / "pythonnet" / "runtime" / "Python.Runtime.dll"
+    runtime_dll.parent.mkdir(parents=True)
+    runtime_dll.write_bytes(b"test")
+    zone_path = Path(f"{runtime_dll}:Zone.Identifier")
+    zone_path.write_text("[ZoneTransfer]\nZoneId=3\n", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(internal), raising=False)
+
+    assert desktop_launcher._unblock_frozen_runtime_binaries() == 1
+    assert not zone_path.exists()
 
 
 def test_run_desktop_closes_splash_when_startup_fails(monkeypatch) -> None:
